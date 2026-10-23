@@ -20,6 +20,14 @@ Now you can visit [`localhost:4000`](http://localhost:4000) from your browser:
 `mix test` needs no S3 server; `mix test --include s3` also tests the S3 adapter
 against the local one.
 
+The invoices for income are issued in [Elorus](https://www.elorus.com). To read them
+through its [API](https://developer.elorus.com) (`IkeEmails.Elorus`), set
+`ELORUS_API_TOKEN` (the API key, found under "User Profile" in Elorus) and
+`ELORUS_ORGANIZATION_ID` (the id of your organization, which every invoice of the
+API carries as its `organization`). Add `ELORUS_DEMO=true` to work on a demo
+organization only. Without a token the integration is off. Elorus allows 60 requests a
+minute and 1000 a day per user.
+
 In production the PDFs go to S3 or a compatible server, configured with the
 environment variables `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 and `AWS_REGION` (and `AWS_ENDPOINT_URL_S3` for a server that is not AWS).
