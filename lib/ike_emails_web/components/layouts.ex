@@ -31,44 +31,59 @@ defmodule IkeEmailsWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
+  attr :active, :atom, default: nil, doc: "the page of the navigation to highlight"
+
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
-      <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
-      </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
-            <.theme_toggle />
-          </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
-        </ul>
+    <header class="border-b border-base-300 bg-base-100/80 backdrop-blur sticky top-0 z-10">
+      <div class="mx-auto flex max-w-5xl items-center gap-6 px-4 py-3 sm:px-6">
+        <.link navigate={~p"/"} class="flex items-center gap-2 font-semibold tracking-tight">
+          <.icon name="hero-document-check" class="size-5 text-primary" /> IkeEmails
+        </.link>
+        <nav class="flex flex-1 items-center gap-1 text-sm">
+          <.nav_link navigate={~p"/"} active={@active == :reconciliation} id="nav-reconciliation">
+            Reconciliation
+          </.nav_link>
+          <.nav_link navigate={~p"/invoices"} active={@active == :invoices} id="nav-invoices">
+            Invoices
+          </.nav_link>
+        </nav>
+        <.theme_toggle />
       </div>
     </header>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
+    <main class="px-4 py-8 sm:px-6 lg:px-8">
+      <div class="mx-auto max-w-5xl space-y-6">
         {render_slot(@inner_block)}
       </div>
     </main>
 
     <.flash_group flash={@flash} />
+    """
+  end
+
+  attr :navigate, :string, required: true
+  attr :active, :boolean, default: false
+  attr :id, :string, required: true
+  slot :inner_block, required: true
+
+  defp nav_link(assigns) do
+    ~H"""
+    <.link
+      navigate={@navigate}
+      id={@id}
+      class={[
+        "rounded-md px-3 py-1.5 font-medium transition-colors",
+        if(@active,
+          do: "bg-base-200 text-base-content",
+          else: "text-base-content/60 hover:bg-base-200/60 hover:text-base-content"
+        )
+      ]}
+    >
+      {render_slot(@inner_block)}
+    </.link>
     """
   end
 

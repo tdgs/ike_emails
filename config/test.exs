@@ -1,5 +1,10 @@
 import Config
 
+config :ike_emails, :bank_api_token, "test-bank-api-token"
+
+# Invoice PDFs are kept in memory, see test/support/storage_in_memory.ex
+config :ike_emails, IkeEmails.Storage, adapter: IkeEmails.Storage.InMemory
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

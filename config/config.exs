@@ -22,6 +22,13 @@ config :ike_emails, IkeEmailsWeb.Endpoint,
   pubsub_server: IkeEmails.PubSub,
   live_view: [signing_salt: "d7nq+Ax8"]
 
+# Invoice PDFs are stored in S3 (SeaweedFS locally, see compose.yaml)
+config :ike_emails, IkeEmails.Storage, adapter: IkeEmails.Storage.S3
+
+config :ike_emails, IkeEmails.Storage.S3,
+  bucket: "ike-emails-invoices",
+  region: "us-east-1"
+
 # Configures the mailer
 #
 # By default it uses the "Local" adapter which stores the emails
