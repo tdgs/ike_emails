@@ -5,6 +5,13 @@ config :ike_emails, :bank_api_token, "test-bank-api-token"
 # Invoice PDFs are kept in memory, see test/support/storage_in_memory.ex
 config :ike_emails, IkeEmails.Storage, adapter: IkeEmails.Storage.InMemory
 
+# Elorus requests are answered by Req.Test stubs, see test/ike_emails/elorus_test.exs
+config :ike_emails, IkeEmails.Elorus,
+  api_token: "test-elorus-token",
+  organization_id: "1000000243015421",
+  demo: false,
+  req_options: [plug: {Req.Test, IkeEmails.Elorus}, retry_delay: 1]
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

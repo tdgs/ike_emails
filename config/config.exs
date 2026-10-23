@@ -29,6 +29,10 @@ config :ike_emails, IkeEmails.Storage.S3,
   bucket: "ike-emails-invoices",
   region: "us-east-1"
 
+# The Elorus API, where the invoices for income are issued. The credentials come
+# from the environment, see config/runtime.exs
+config :ike_emails, IkeEmails.Elorus, base_url: "https://api.elorus.com"
+
 # Configures the mailer
 #
 # By default it uses the "Local" adapter which stores the emails

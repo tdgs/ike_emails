@@ -20,6 +20,34 @@ if System.get_env("PHX_SERVER") do
   config :ike_emails, IkeEmailsWeb.Endpoint, server: true
 end
 
+# The Elorus API is optional: without ELORUS_API_TOKEN the integration is off.
+# The key is found under "User Profile" in Elorus. ELORUS_ORGANIZATION_ID is the
+# id of the organization to work on. ELORUS_DEMO=true makes the requests work on
+# a demo organization only. The tests have their own credentials, see
+# config/test.exs.
+elorus_token = System.get_env("ELORUS_API_TOKEN")
+
+if config_env() != :test and elorus_token not in [nil, ""] do
+  organization_id =
+    case System.get_env("ELORUS_ORGANIZATION_ID") do
+      id when id in [nil, ""] -> raise("environment variable ELORUS_ORGANIZATION_ID is missing.")
+      id -> id
+    end
+
+  # A typo must not send the requests to the real organization
+  demo =
+    case "ELORUS_DEMO" |> System.get_env("") |> String.trim() |> String.downcase() do
+      value when value in ["true", "1"] -> true
+      value when value in ["", "false", "0"] -> false
+      value -> raise("environment variable ELORUS_DEMO must be true or false, not #{value}.")
+    end
+
+  config :ike_emails, IkeEmails.Elorus,
+    api_token: elorus_token,
+    organization_id: organization_id,
+    demo: demo
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
