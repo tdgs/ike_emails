@@ -1,0 +1,14 @@
+{
+  "identities": [
+    {
+      "name": "ike_emails_dev",
+      "credentials": [
+        {
+          "accessKey": "ike-emails-dev",
+          "secretKey": "ike-emails-dev-secret"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

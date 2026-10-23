@@ -1,13 +1,58 @@
 # IkeEmails
 
-To start your Phoenix server:
+## Local development
 
-* Run `mix setup` to install and setup dependencies
+The invoice PDFs are stored in S3. Locally that is a SeaweedFS container
+(S3 on `127.0.0.1:8333`, credentials in `dev/seaweedfs-s3.json`):
+
+* Run `docker compose up -d` to start the local S3 server
+* Run `mix setup` to install and setup dependencies; it also creates the bucket
+  (`mix storage.setup` does only that)
 * Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+Now you can visit [`localhost:4000`](http://localhost:4000) from your browser:
+
+* `/` is the monthly reconciliation: the transactions of a month, each with its
+  invoices. A transaction gets an invoice by uploading its PDF or attaching one
+  that exists, or is marked "no invoice needed" with a reason (tax, dividends, ...).
+* `/invoices` lists every invoice, and uploads one before its payment is known.
+
+`mix test` needs no S3 server; `mix test --include s3` also tests the S3 adapter
+against the local one.
+
+In production the PDFs go to S3 or a compatible server, configured with the
+environment variables `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+and `AWS_REGION` (and `AWS_ENDPOINT_URL_S3` for a server that is not AWS).
+There is no login yet: do not expose the app before adding one.
 
 Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
+
+## API
+
+The bank crawler pushes bank transactions, one per request:
+
+    POST /api/transactions
+    Authorization: Bearer <BANK_API_TOKEN>
+    Content-Type: application/json
+
+    {"date": "2026-10-19", "value_date": "2026-10-17", "description": "ANTHROPIC* CLAUDE SU",
+     "branch": "99", "transaction_id": "202610190993537650", "amount": "-90.00",
+     "conversion_details": null, "sender_details": null, "additional_information": null}
+
+The fields are the columns of the crawler's `transactions.csv`. `amount` is a
+signed decimal string (negative is money out), dates are `YYYY-MM-DD`. The
+last three fields are optional.
+
+* `201` the transaction was stored.
+* `200` the transaction was already stored; the stored one is returned. A
+  transaction is told apart by `(transaction_id, amount, description)`, since
+  the bank books a transfer and its fee under the same `transaction_id`. Pushing
+  a statement again is therefore safe.
+* `422` invalid fields: `{"errors": {"amount": ["is invalid"]}}`.
+* `401` missing or wrong token.
+
+The token is read from the `BANK_API_TOKEN` environment variable in production,
+and is `dev-bank-api-token` in development.
 
 ## Learn more
 

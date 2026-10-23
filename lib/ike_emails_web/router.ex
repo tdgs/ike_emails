@@ -14,16 +14,27 @@ defmodule IkeEmailsWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :api_auth do
+    plug IkeEmailsWeb.Plugs.ApiAuth
+  end
+
   scope "/", IkeEmailsWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", ReconciliationLive, :index
+    live "/transactions/:id/invoice", ReconciliationLive, :attach
+
+    live "/invoices", InvoiceLive.Index, :index
+    live "/invoices/new", InvoiceLive.Index, :new
+    live "/invoices/:id/edit", InvoiceLive.Index, :edit
+    get "/invoices/:id/pdf", InvoicePdfController, :show
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", IkeEmailsWeb do
-  #   pipe_through :api
-  # end
+  scope "/api", IkeEmailsWeb do
+    pipe_through [:api, :api_auth]
+
+    post "/transactions", TransactionController, :create
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:ike_emails, :dev_routes) do

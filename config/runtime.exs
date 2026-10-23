@@ -50,6 +50,28 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
+  config :ike_emails,
+         :bank_api_token,
+         System.get_env("BANK_API_TOKEN") ||
+           raise("""
+           environment variable BANK_API_TOKEN is missing.
+           It is the bearer token the bank crawler pushes transactions with.
+           """)
+
+  config :ike_emails, IkeEmails.Storage.S3,
+    bucket:
+      System.get_env("S3_BUCKET") ||
+        raise("environment variable S3_BUCKET is missing, the bucket for the invoice PDFs."),
+    region: System.get_env("AWS_REGION") || "us-east-1",
+    # Only for S3-compatible servers, AWS needs none
+    endpoint_url: System.get_env("AWS_ENDPOINT_URL_S3"),
+    access_key_id:
+      System.get_env("AWS_ACCESS_KEY_ID") ||
+        raise("environment variable AWS_ACCESS_KEY_ID is missing."),
+    secret_access_key:
+      System.get_env("AWS_SECRET_ACCESS_KEY") ||
+        raise("environment variable AWS_SECRET_ACCESS_KEY is missing.")
+
   host = System.get_env("PHX_HOST") || "example.com"
   port = String.to_integer(System.get_env("PORT") || "4000")
 

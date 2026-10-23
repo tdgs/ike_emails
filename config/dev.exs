@@ -1,5 +1,8 @@
 import Config
 
+# Bearer token for the bank crawler, see IkeEmailsWeb.Plugs.ApiAuth
+config :ike_emails, :bank_api_token, "dev-bank-api-token"
+
 # Configure your database
 config :ike_emails, IkeEmails.Repo,
   username: "postgres",
@@ -86,3 +89,9 @@ config :phoenix_live_view,
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# The local S3 server of compose.yaml, with the credentials of dev/seaweedfs-s3.json
+config :ike_emails, IkeEmails.Storage.S3,
+  endpoint_url: "http://127.0.0.1:8333",
+  access_key_id: "ike-emails-dev",
+  secret_access_key: "ike-emails-dev-secret"
