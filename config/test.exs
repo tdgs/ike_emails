@@ -12,6 +12,8 @@ config :ike_emails, IkeEmails.Elorus,
   demo: false,
   req_options: [plug: {Req.Test, IkeEmails.Elorus}, retry_delay: 1]
 
+config :ike_emails, :business, name: "Test Business", vat: "EL099999999"
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

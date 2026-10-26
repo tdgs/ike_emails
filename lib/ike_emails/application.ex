@@ -12,6 +12,8 @@ defmodule IkeEmails.Application do
       IkeEmails.Repo,
       {DNSCluster, query: Application.get_env(:ike_emails, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: IkeEmails.PubSub},
+      # Runs the slow calls (to Elorus) away from the LiveViews that wait for them
+      {Task.Supervisor, name: IkeEmails.TaskSupervisor},
       # Start a worker by calling: IkeEmails.Worker.start_link(arg)
       # {IkeEmails.Worker, arg},
       # Start to serve requests, typically the last entry

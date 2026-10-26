@@ -195,6 +195,15 @@ defmodule IkeEmailsWeb.InvoiceComponents do
         <.input field={@form[:issuer_vat]} type="text" label="Issuer VAT" />
         <.input field={@form[:number]} type="text" label="Invoice number" />
       </div>
+      <div class="grid grid-cols-2 gap-3">
+        <.input
+          field={@form[:receiver_name]}
+          type="text"
+          label="Receiver"
+          placeholder="Only if you issued it"
+        />
+        <.input field={@form[:receiver_vat]} type="text" label="Receiver VAT" />
+      </div>
       <.input field={@form[:notes]} type="textarea" label="Notes" rows="2" />
 
       <div class="flex items-center justify-end gap-2 pt-2">

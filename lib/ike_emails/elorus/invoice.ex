@@ -52,13 +52,17 @@ defmodule IkeEmails.Elorus.Invoice do
       total: decimal(data["total"]),
       payable: decimal(data["payable"]),
       paid: decimal(data["paid"]),
-      permalink: blank_to_nil(data["permalink"]),
+      permalink: data["permalink"] |> blank_to_nil() |> https_url(),
       raw: data
     }
   end
 
   defp blank_to_nil(value) when value in [nil, ""], do: nil
   defp blank_to_nil(value), do: value
+
+  # The API gives the public link without a scheme, as "//host/path/"
+  defp https_url("//" <> _ = url), do: "https:" <> url
+  defp https_url(url), do: url
 
   defp date(value) when is_binary(value) do
     case Date.from_iso8601(value) do

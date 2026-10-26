@@ -25,7 +25,14 @@ through its [API](https://developer.elorus.com) (`IkeEmails.Elorus`), set
 `ELORUS_API_TOKEN` (the API key, found under "User Profile" in Elorus) and
 `ELORUS_ORGANIZATION_ID` (the id of your organization, which every invoice of the
 API carries as its `organization`). Add `ELORUS_DEMO=true` to work on a demo
-organization only. Without a token the integration is off. Elorus allows 60 requests a
+organization only. Without a token the integration is off.
+
+With it, the panel to add an invoice to a transaction that is money in has a
+section "Invoices in Elorus": a button asks Elorus for the invoices of the month
+shown, the ones for the amount of the transaction first, and "Attach" downloads
+the PDF and stores it as an invoice of the transaction. You are the issuer of
+such an invoice, so set `BUSINESS_NAME` (and `BUSINESS_VAT`) to say who you are;
+the client of the Elorus invoice becomes its receiver. Elorus allows 60 requests a
 minute and 1000 a day per user.
 
 In production the PDFs go to S3 or a compatible server, configured with the

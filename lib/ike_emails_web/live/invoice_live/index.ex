@@ -157,7 +157,7 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
           name="q"
           value={@search}
           type="search"
-          placeholder="Search by issuer or invoice number"
+          placeholder="Search by issuer, receiver or invoice number"
           phx-debounce="250"
         />
       </.form>
@@ -176,7 +176,12 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
               {format_date(invoice.date)}
             </div>
             <div class="min-w-0 flex-1 basis-56">
-              <div class="font-medium">{invoice.issuer_name}</div>
+              <div class="font-medium">
+                {invoice.issuer_name}
+                <span :if={invoice.receiver_name} class="font-normal text-base-content/60">
+                  → {invoice.receiver_name}
+                </span>
+              </div>
               <div class="truncate text-sm text-base-content/60">
                 {Enum.join(
                   Enum.reject(

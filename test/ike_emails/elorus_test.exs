@@ -142,6 +142,19 @@ defmodule IkeEmails.ElorusTest do
       assert first.raw["id"] == "1050000300010040"
     end
 
+    test "makes the public link of the invoice a full URL" do
+      stub_json(
+        page_json([
+          invoice_json(%{"id" => "1", "permalink" => "//app.elorus.com/p/abc/"}),
+          invoice_json(%{"id" => "2", "permalink" => "https://app.elorus.com/p/def/"})
+        ])
+      )
+
+      assert {:ok, %{invoices: [first, second]}} = Elorus.list_invoices()
+      assert first.permalink == "https://app.elorus.com/p/abc/"
+      assert second.permalink == "https://app.elorus.com/p/def/"
+    end
+
     test "passes the filters as query parameters, newest first by default" do
       stub_json(page_json([]))
 
