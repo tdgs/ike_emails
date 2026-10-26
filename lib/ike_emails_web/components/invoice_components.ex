@@ -103,14 +103,17 @@ defmodule IkeEmailsWeb.InvoiceComponents do
   end
 
   @doc """
-  The form of an invoice. With an `:upload` it also takes the PDF, without one
-  it only edits what is typed in. The page handles `validate`, `save` and
-  `cancel-upload`.
+  The form of an invoice. With an `:upload` it also takes the PDF, and offers to
+  fill in the form from it with AI, without one it only edits what is typed in.
+  The page handles `validate`, `save`, `cancel-upload` and `extract`.
   """
   attr :form, Phoenix.HTML.Form, required: true
   attr :id, :string, default: "invoice-form"
   attr :upload, :any, default: nil, doc: "the `:pdf` upload config of the page"
   attr :pdf_error, :string, default: nil
+  attr :extract_configured?, :boolean, default: false, doc: "whether a model can read the PDF"
+  attr :extracting?, :boolean, default: false, doc: "whether the PDF is being read"
+  attr :extract_error, :string, default: nil
   attr :submit_label, :string, required: true
   slot :actions
 
@@ -174,6 +177,40 @@ defmodule IkeEmailsWeb.InvoiceComponents do
           class="mt-2 flex items-center gap-1 text-sm text-error"
         >
           <.icon name="hero-exclamation-circle" class="size-4" />{@pdf_error}
+        </p>
+
+        <div
+          :if={@upload.entries != [] and Enum.all?(@upload.entries, & &1.done?)}
+          class="mt-3 flex items-center gap-3"
+        >
+          <button
+            :if={@extract_configured?}
+            id={"#{@id}-extract"}
+            type="button"
+            phx-click="extract"
+            disabled={@extracting?}
+            class="inline-flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-wait disabled:opacity-60"
+          >
+            <.icon
+              name={if(@extracting?, do: "hero-arrow-path", else: "hero-sparkles")}
+              class={if(@extracting?, do: "size-4 animate-spin", else: "size-4")}
+            />
+            {if @extracting?, do: "Reading the invoice...", else: "Extract with AI"}
+          </button>
+          <p
+            :if={not @extract_configured?}
+            id={"#{@id}-extract-hint"}
+            class="text-xs text-base-content/50"
+          >
+            Set <code>AI_MODEL</code> to fill in the form from the PDF with AI.
+          </p>
+        </div>
+        <p
+          :if={@extract_error}
+          id={"#{@id}-extract-error"}
+          class="mt-2 flex items-center gap-1 text-sm text-error"
+        >
+          <.icon name="hero-exclamation-circle" class="size-4" />{@extract_error}
         </p>
       </div>
 

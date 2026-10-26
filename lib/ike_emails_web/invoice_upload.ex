@@ -6,6 +6,7 @@ defmodule IkeEmailsWeb.InvoiceUpload do
   import Phoenix.LiveView, only: [allow_upload: 3, consume_uploaded_entries: 3]
 
   alias IkeEmails.Invoicing
+  alias IkeEmails.Invoicing.Invoice
 
   @doc """
   Sets up the single `:pdf` upload of a LiveView.
@@ -57,6 +58,54 @@ defmodule IkeEmailsWeb.InvoiceUpload do
         {:error, message}
     end
   end
+
+  @doc """
+  Reads the uploaded PDF without consuming it, so that it can still be saved
+  with the invoice afterwards.
+  """
+  def peek_pdf(socket) do
+    case problem(socket) do
+      nil ->
+        [pdf] =
+          consume_uploaded_entries(socket, :pdf, fn %{path: path}, _entry ->
+            {:postpone, File.read!(path)}
+          end)
+
+        {:ok, pdf}
+
+      message ->
+        {:error, message}
+    end
+  end
+
+  @doc """
+  What is known of the invoice before the PDF is read, to help to read it: the
+  amount, currency and date the form was started with.
+  """
+  def hints(%Invoice{} = invoice) do
+    %{amount_input: invoice.amount_input, currency: invoice.currency, date: invoice.date}
+  end
+
+  @doc """
+  The params of the form with what was found in the PDF on top of them.
+  """
+  def merge_extracted(params, found), do: Map.merge(params || %{}, found)
+
+  @doc """
+  What to tell about a reason why `IkeEmails.InvoiceExtractor.extract/2` could
+  not read the PDF.
+  """
+  def extraction_error_message(:not_configured), do: "Reading invoices with AI is not set up."
+  def extraction_error_message(:missing_key), do: "The API key of the AI provider is not set."
+  def extraction_error_message(:unauthorized), do: "The AI provider did not accept the API key."
+  def extraction_error_message(:rate_limited), do: "The AI provider is busy. Try again soon."
+  def extraction_error_message(:timeout), do: "The AI provider took too long. Try again."
+
+  def extraction_error_message(:invalid_response),
+    do: "The AI could not read this invoice. Fill it in by hand."
+
+  def extraction_error_message(_reason),
+    do: "Reading the invoice failed. Fill it in by hand."
 
   @doc """
   What to tell about an error of `IkeEmails.Invoicing.create_invoice/4` that is
