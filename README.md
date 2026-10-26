@@ -35,6 +35,16 @@ such an invoice, so set `BUSINESS_NAME` (and `BUSINESS_VAT`) to say who you are;
 the client of the Elorus invoice becomes its receiver. Elorus allows 60 requests a
 minute and 1000 a day per user.
 
+After a PDF is uploaded, "Extract with AI" reads it with a language model and fills
+in the form (`IkeEmails.InvoiceExtractor`); you review the values and save. It is
+not tied to a vendor: set `AI_MODEL` to a provider and a model, such as
+`anthropic:claude-sonnet-5-5` or `openai:gpt-5`, and the API key of that provider in
+its own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, ...). The
+work is done by [ReqLLM](https://hex.pm/packages/req_llm), which lists the providers
+and the models. The model must accept PDFs. Switching provider is a change of
+`AI_MODEL` and the key. The PDF is sent to the provider you choose, only when the
+button is clicked. Without `AI_MODEL` the feature is off.
+
 In production the PDFs go to S3 or a compatible server, configured with the
 environment variables `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 and `AWS_REGION` (and `AWS_ENDPOINT_URL_S3` for a server that is not AWS).

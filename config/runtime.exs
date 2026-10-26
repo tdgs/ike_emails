@@ -48,6 +48,17 @@ if config_env() != :test and elorus_token not in [nil, ""] do
     demo: demo
 end
 
+# Reading the PDF of an invoice with a language model is optional: without
+# AI_MODEL the feature is off. AI_MODEL is a provider and a model, such as
+# anthropic:claude-sonnet-5-5 or openai:gpt-5, and the provider's own API key
+# must be set too, such as ANTHROPIC_API_KEY or OPENAI_API_KEY. The PDF is sent
+# to that provider. The tests have their own, see config/test.exs.
+ai_model = System.get_env("AI_MODEL")
+
+if config_env() != :test and ai_model not in [nil, ""] do
+  config :ike_emails, IkeEmails.InvoiceExtractor, model: ai_model
+end
+
 # Who you are, as the issuer of the invoices imported from Elorus (Elorus does not
 # tell). The name is needed to import them, the VAT number is optional. The
 # tests have their own, see config/test.exs.

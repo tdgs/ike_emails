@@ -12,6 +12,11 @@ config :ike_emails, IkeEmails.Elorus,
   demo: false,
   req_options: [plug: {Req.Test, IkeEmails.Elorus}, retry_delay: 1]
 
+# Invoices are read by a stub, see test/support/invoice_extractor_stub.ex
+config :ike_emails, IkeEmails.InvoiceExtractor,
+  client: IkeEmails.InvoiceExtractorStub,
+  model: "test:model"
+
 config :ike_emails, :business, name: "Test Business", vat: "EL099999999"
 
 # Configure your database

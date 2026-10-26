@@ -33,6 +33,12 @@ config :ike_emails, IkeEmails.Storage.S3,
 # from the environment, see config/runtime.exs
 config :ike_emails, IkeEmails.Elorus, base_url: "https://api.elorus.com"
 
+# Reading invoice PDFs with a language model is optional, and the model is set
+# by the environment, see config/runtime.exs
+config :ike_emails, IkeEmails.InvoiceExtractor,
+  client: IkeEmails.InvoiceExtractor.Client.ReqLLM,
+  model: nil
+
 # Configures the mailer
 #
 # By default it uses the "Local" adapter which stores the emails

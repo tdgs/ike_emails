@@ -12,6 +12,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   alias IkeEmails.Banking
   alias IkeEmails.Elorus
+  alias IkeEmails.InvoiceExtractor
   alias IkeEmails.Invoicing
   alias IkeEmails.Money
   alias IkeEmailsWeb.InvoiceUpload
@@ -28,6 +29,9 @@ defmodule IkeEmailsWeb.ReconciliationLive do
      |> assign(:pdf_error, nil)
      |> assign(:suggestion_search, "")
      |> assign(:elorus_configured?, Elorus.configured?())
+     |> assign(:extract_configured?, InvoiceExtractor.configured?())
+     |> assign(:extracting?, false)
+     |> assign(:extract_error, nil)
      |> stream(:transactions, [])
      |> stream(:suggestions, [])
      |> reset_elorus()
@@ -55,10 +59,11 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     |> assign_form(Invoicing.change_invoice(prefill))
     |> load_suggestions()
     |> reset_elorus()
+    |> reset_extract()
   end
 
   defp open_transaction(socket, _action, _params) do
-    socket |> assign(:transaction, nil) |> reset_elorus()
+    socket |> assign(:transaction, nil) |> reset_elorus() |> reset_extract()
   end
 
   defp month_from(param, transaction) do
@@ -117,6 +122,15 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     |> stream(:elorus_invoices, [], reset: true)
   end
 
+  # A PDF that is still being read is forgotten: the result would be for another
+  # panel, or for a file that is gone
+  defp reset_extract(socket) do
+    socket
+    |> cancel_async(:extract)
+    |> assign(:extracting?, false)
+    |> assign(:extract_error, nil)
+  end
+
   defp assign_form(socket, %Ecto.Changeset{} = changeset) do
     assign(socket, :form, to_form(changeset, as: :invoice))
   end
@@ -166,11 +180,39 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     changeset =
       socket.assigns.prefill |> Invoicing.change_invoice(params) |> Map.put(:action, :validate)
 
-    {:noreply, socket |> assign(:pdf_error, nil) |> assign_form(changeset)}
+    {:noreply,
+     socket
+     |> assign(:pdf_error, nil)
+     |> assign(:extract_error, nil)
+     |> assign_form(changeset)}
   end
 
   def handle_event("cancel-upload", %{"ref" => ref}, socket) do
-    {:noreply, cancel_upload(socket, :pdf, ref)}
+    {:noreply, socket |> cancel_upload(:pdf, ref) |> reset_extract()}
+  end
+
+  def handle_event("extract", _params, %{assigns: %{extracting?: true}} = socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("extract", _params, socket) do
+    with {:configured, true} <- {:configured, InvoiceExtractor.configured?()},
+         {:ok, pdf} <- InvoiceUpload.peek_pdf(socket) do
+      hints = InvoiceUpload.hints(socket.assigns.prefill)
+
+      {:noreply,
+       socket
+       |> assign(:extract_error, nil)
+       |> assign(:extracting?, true)
+       |> start_async(:extract, fn -> InvoiceExtractor.extract(pdf, hints: hints) end)}
+    else
+      {:configured, false} ->
+        message = InvoiceUpload.extraction_error_message(:not_configured)
+        {:noreply, assign(socket, :extract_error, message)}
+
+      {:error, message} ->
+        {:noreply, assign(socket, :pdf_error, message)}
+    end
   end
 
   def handle_event("save", %{"invoice" => params}, socket) do
@@ -235,6 +277,46 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     else
       _ -> {:noreply, socket}
     end
+  end
+
+  ## Reading the PDF with AI
+  #
+  # It takes a few seconds, so it runs in an async task. Another panel or a
+  # cancelled upload cancels it, see reset_extract/1.
+
+  @impl true
+  def handle_async(:extract, {:ok, {:ok, found}}, socket) when found == %{} do
+    {:noreply, extract_failed(socket, :invalid_response)}
+  end
+
+  def handle_async(:extract, {:ok, {:ok, found}}, socket) do
+    %{prefill: prefill, form: form} = socket.assigns
+    params = InvoiceUpload.merge_extracted(form.params, found)
+    changeset = prefill |> Invoicing.change_invoice(params) |> Map.put(:action, :validate)
+
+    {:noreply,
+     socket
+     |> assign(:extracting?, false)
+     |> assign(:extract_error, nil)
+     |> assign_form(changeset)
+     |> put_flash(:info, "Filled in from the PDF. Check the values before saving.")}
+  end
+
+  def handle_async(:extract, {:ok, {:error, reason}}, socket) do
+    {:noreply, extract_failed(socket, reason)}
+  end
+
+  def handle_async(:extract, {:exit, {:shutdown, :cancel}}, socket), do: {:noreply, socket}
+
+  def handle_async(:extract, {:exit, reason}, socket) do
+    Logger.error("Reading an invoice with AI crashed: #{inspect(reason)}")
+    {:noreply, extract_failed(socket, :crashed)}
+  end
+
+  defp extract_failed(socket, reason) do
+    socket
+    |> assign(:extracting?, false)
+    |> assign(:extract_error, InvoiceUpload.extraction_error_message(reason))
   end
 
   ## Elorus
@@ -522,6 +604,9 @@ defmodule IkeEmailsWeb.ReconciliationLive do
               form={@form}
               upload={@uploads.pdf}
               pdf_error={@pdf_error}
+              extract_configured?={@extract_configured?}
+              extracting?={@extracting?}
+              extract_error={@extract_error}
               submit_label="Save invoice"
             />
           </section>
@@ -885,10 +970,10 @@ defmodule IkeEmailsWeb.ReconciliationLive do
           </span>
         </div>
         <div class="text-base-content/60">
-          <span :if={@invoice.date}>{format_date(@invoice.date)}            · </span>
+          <span :if={@invoice.date}>{format_date(@invoice.date)}                 · </span>
           <span class="tabular-nums">{elorus_total(@invoice)}</span>
-          <span :if={@invoice.representation}> ·            {@invoice.representation}</span>
-          <span :if={@invoice.status}> ·            {@invoice.status}</span>
+          <span :if={@invoice.representation}> ·                 {@invoice.representation}</span>
+          <span :if={@invoice.status}> ·                 {@invoice.status}</span>
         </div>
       </div>
       <a
