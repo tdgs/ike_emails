@@ -243,6 +243,45 @@ defmodule IkeEmails.InvoicingTest do
     end
   end
 
+  describe "the receiver" do
+    test "is optional, and its VAT number is normalized like the issuer's" do
+      assert {:ok, expense} = Invoicing.create_invoice(invoice_attrs(), pdf_fixture(), "a.pdf")
+      assert {expense.receiver_name, expense.receiver_vat} == {nil, nil}
+
+      attrs = invoice_attrs(%{"receiver_name" => "Acme Inc.", "receiver_vat" => "el 123.456-789"})
+      assert {:ok, issued} = Invoicing.create_invoice(attrs, pdf_fixture(), "b.pdf")
+      assert {issued.receiver_name, issued.receiver_vat} == {"Acme Inc.", "EL123456789"}
+    end
+
+    test "has limits on its length" do
+      attrs =
+        invoice_attrs(%{
+          "receiver_name" => String.duplicate("é", 256),
+          "receiver_vat" => String.duplicate("1", 33)
+        })
+
+      assert {:error, changeset} = Invoicing.create_invoice(attrs, pdf_fixture(), "a.pdf")
+
+      assert %{
+               receiver_name: ["should be at most 255 character(s)"],
+               receiver_vat: ["should be at most 32 character(s)"]
+             } = errors_on(changeset)
+    end
+
+    test "can be edited, but the Elorus id cannot" do
+      invoice = invoice_fixture()
+
+      assert {:ok, updated} =
+               Invoicing.update_invoice(invoice, %{
+                 "receiver_name" => "Acme",
+                 "elorus_id" => "hacked"
+               })
+
+      assert updated.receiver_name == "Acme"
+      assert updated.elorus_id == nil
+    end
+  end
+
   describe "list_invoices/1" do
     test "lists the newest first, with their transactions" do
       transaction = transaction_fixture()
@@ -264,6 +303,14 @@ defmodule IkeEmails.InvoicingTest do
       assert id == github.id
       assert [%{issuer_name: "Linode"}] = Invoicing.list_invoices(search: "ln-7")
       assert length(Invoicing.list_invoices(search: "  ")) == 2
+    end
+
+    test "searches the receiver name too" do
+      issued = invoice_fixture(%{"issuer_name" => "Me", "receiver_name" => "Acme Inc."})
+      _expense = invoice_fixture(%{"issuer_name" => "Linode"})
+
+      assert [%{id: id}] = Invoicing.list_invoices(search: "acme")
+      assert id == issued.id
     end
 
     test "does not treat wildcards in the search as wildcards" do

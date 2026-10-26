@@ -16,6 +16,9 @@ defmodule IkeEmails.Invoicing.Invoice do
     field :date, :date
     field :issuer_name, :string
     field :issuer_vat, :string
+    # Set on an invoice that you issued, whose issuer is you
+    field :receiver_name, :string
+    field :receiver_vat, :string
     field :number, :string
     field :notes, :string
 
@@ -23,6 +26,9 @@ defmodule IkeEmails.Invoicing.Invoice do
     field :file_name, :string
     field :file_size, :integer
     field :file_sha256, :string
+
+    # The id of the Elorus invoice this one was imported from
+    field :elorus_id, :string
 
     many_to_many :transactions, Transaction, join_through: "invoice_transactions"
 
@@ -43,13 +49,26 @@ defmodule IkeEmails.Invoicing.Invoice do
   """
   def changeset(invoice, attrs) do
     invoice
-    |> cast(attrs, [:amount_input, :currency, :date, :issuer_name, :issuer_vat, :number, :notes])
+    |> cast(attrs, [
+      :amount_input,
+      :currency,
+      :date,
+      :issuer_name,
+      :issuer_vat,
+      :receiver_name,
+      :receiver_vat,
+      :number,
+      :notes
+    ])
     |> update_change(:currency, &String.upcase(String.trim(&1)))
     |> update_change(:issuer_vat, &normalize_vat/1)
+    |> update_change(:receiver_vat, &normalize_vat/1)
     |> validate_required([:amount_input, :currency, :date, :issuer_name])
     |> validate_format(:currency, ~r/^[A-Z]{3}$/, message: "must be a 3 letter code")
     |> validate_length(:issuer_name, max: 255, count: :codepoints)
     |> validate_length(:issuer_vat, max: 32, count: :codepoints)
+    |> validate_length(:receiver_name, max: 255, count: :codepoints)
+    |> validate_length(:receiver_vat, max: 32, count: :codepoints)
     |> validate_length(:number, max: 64, count: :codepoints)
     |> validate_length(:notes, max: 5000)
     |> put_amount_cents()
@@ -63,6 +82,14 @@ defmodule IkeEmails.Invoicing.Invoice do
     |> changeset(attrs)
     |> change(Map.take(file, [:file_key, :file_name, :file_size, :file_sha256]))
     |> unique_constraint(:file_sha256, message: "has already been uploaded")
+  end
+
+  @doc """
+  Records the Elorus invoice the invoice is imported from. It is not part of what
+  is typed in, so it has no place in `changeset/2`.
+  """
+  def put_elorus_id(changeset, elorus_id) do
+    changeset |> put_change(:elorus_id, elorus_id) |> unique_constraint(:elorus_id)
   end
 
   defp put_amount_cents(changeset) do

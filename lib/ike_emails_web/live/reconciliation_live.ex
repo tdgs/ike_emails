@@ -11,6 +11,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   import IkeEmailsWeb.InvoiceComponents
 
   alias IkeEmails.Banking
+  alias IkeEmails.Elorus
   alias IkeEmails.Invoicing
   alias IkeEmails.Money
   alias IkeEmailsWeb.InvoiceUpload
@@ -26,8 +27,10 @@ defmodule IkeEmailsWeb.ReconciliationLive do
      |> assign(:duplicate, nil)
      |> assign(:pdf_error, nil)
      |> assign(:suggestion_search, "")
+     |> assign(:elorus_configured?, Elorus.configured?())
      |> stream(:transactions, [])
      |> stream(:suggestions, [])
+     |> reset_elorus()
      |> InvoiceUpload.allow()}
   end
 
@@ -51,10 +54,11 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     |> assign(:suggestion_search, "")
     |> assign_form(Invoicing.change_invoice(prefill))
     |> load_suggestions()
+    |> reset_elorus()
   end
 
   defp open_transaction(socket, _action, _params) do
-    assign(socket, :transaction, nil)
+    socket |> assign(:transaction, nil) |> reset_elorus()
   end
 
   defp month_from(param, transaction) do
@@ -92,6 +96,25 @@ defmodule IkeEmailsWeb.ReconciliationLive do
       Invoicing.suggest_invoices(socket.assigns.transaction, socket.assigns.suggestion_search)
 
     stream(socket, :suggestions, suggestions, reset: true)
+  end
+
+  # What the panel knows of Elorus. A search that is still running is forgotten,
+  # and its result ignored when it arrives, see handle_info/2. An import is not:
+  # it goes on whatever panel is open, and says how it ended when it is done.
+  defp reset_elorus(socket) do
+    task =
+      case socket.assigns[:elorus_task] do
+        %{action: :import} = import -> import
+        _search_or_none -> nil
+      end
+
+    socket
+    |> assign(:elorus_task, task)
+    |> assign(:elorus_loaded?, false)
+    |> assign(:elorus_error, nil)
+    |> assign(:elorus_by_id, %{})
+    |> assign(:elorus_stored, MapSet.new())
+    |> stream(:elorus_invoices, [], reset: true)
   end
 
   defp assign_form(socket, %Ecto.Changeset{} = changeset) do
@@ -187,6 +210,171 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   def handle_event("search_suggestions", %{"q" => term}, socket) do
     {:noreply, socket |> assign(:suggestion_search, term) |> load_suggestions()}
+  end
+
+  def handle_event("search_elorus", _params, socket) do
+    if elorus_ready?(socket) do
+      %{transaction: transaction, month: month} = socket.assigns
+
+      {:noreply,
+       start_elorus_task(socket, :search, fn -> Invoicing.search_elorus(transaction, month) end)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("attach_elorus", %{"id" => id}, socket) do
+    with true <- elorus_ready?(socket),
+         %Elorus.Invoice{} = invoice <- socket.assigns.elorus_by_id[id] do
+      transaction = socket.assigns.transaction
+
+      {:noreply,
+       start_elorus_task(socket, :import, fn ->
+         Invoicing.import_elorus_invoice(invoice, transaction)
+       end)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  ## Elorus
+  #
+  # The calls to Elorus and the import of a PDF take a while, so they run in a
+  # task of the task supervisor, and the LiveView goes on meanwhile. One at a time.
+
+  defp elorus_ready?(socket) do
+    transaction = socket.assigns.transaction
+
+    socket.assigns.elorus_configured? and socket.assigns.elorus_task == nil and
+      transaction != nil and income?(transaction)
+  end
+
+  defp income?(transaction), do: Decimal.positive?(transaction.amount)
+
+  defp start_elorus_task(socket, action, fun) do
+    task = Task.Supervisor.async_nolink(IkeEmails.TaskSupervisor, fun)
+
+    socket
+    |> assign(:elorus_task, %{
+      ref: task.ref,
+      action: action,
+      transaction_id: socket.assigns.transaction.id
+    })
+    |> assign(:elorus_error, nil)
+  end
+
+  @impl true
+  def handle_info({ref, result}, %{assigns: %{elorus_task: %{ref: ref} = task}} = socket) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, socket |> assign(:elorus_task, nil) |> finish_elorus(task, result)}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{assigns: %{elorus_task: %{ref: ref} = task}} = socket
+      ) do
+    Logger.error("The task for Elorus crashed: #{inspect(reason)}")
+    {:noreply, socket |> assign(:elorus_task, nil) |> elorus_failed(task, :crashed)}
+  end
+
+  # The result of a search whose panel was closed meanwhile
+  def handle_info(_message, socket), do: {:noreply, socket}
+
+  defp finish_elorus(socket, %{action: :search}, {:ok, invoices}) do
+    stored = invoices |> Enum.map(& &1.id) |> Invoicing.imported_elorus_ids()
+
+    socket
+    |> assign(:elorus_loaded?, true)
+    |> assign(:elorus_by_id, Map.new(invoices, &{&1.id, &1}))
+    |> assign(:elorus_stored, stored)
+    |> stream(:elorus_invoices, invoices, reset: true)
+  end
+
+  defp finish_elorus(socket, %{action: :import} = task, {:ok, _invoice}) do
+    socket = put_flash(socket, :info, "Invoice attached from Elorus.")
+
+    # The panel of the transaction is closed. Another one may be open by now, so
+    # only the rows of the month are brought up to date.
+    if open_panel?(socket, task),
+      do: push_patch(socket, to: month_path(socket.assigns.month)),
+      else: refresh(socket)
+  end
+
+  defp finish_elorus(socket, task, {:error, reason}), do: elorus_failed(socket, task, reason)
+  defp finish_elorus(socket, task, other), do: elorus_failed(socket, task, {:unexpected, other})
+
+  defp elorus_failed(socket, task, reason) do
+    message = elorus_error_message(reason)
+
+    if open_panel?(socket, task),
+      do: assign(socket, :elorus_error, message),
+      else: put_flash(socket, :error, "The invoice from Elorus was not attached. " <> message)
+  end
+
+  # Whether the panel of the transaction the task is for is the one that is open
+  defp open_panel?(socket, task),
+    do: match?(%{id: id} when id == task.transaction_id, socket.assigns.transaction)
+
+  defp elorus_error_message(reason) when reason in [:unauthorized, :forbidden],
+    do: "Elorus refused the API key."
+
+  defp elorus_error_message({:rate_limited, seconds}) when is_integer(seconds),
+    do: "Elorus is limiting requests. Try again in #{seconds} seconds."
+
+  defp elorus_error_message({:rate_limited, nil}),
+    do: "Elorus is limiting requests. Try again in a minute."
+
+  defp elorus_error_message(:business_not_configured),
+    do: "Set BUSINESS_NAME to import invoices from Elorus."
+
+  defp elorus_error_message(:not_found), do: "Elorus does not have that invoice any more."
+
+  defp elorus_error_message(:too_large), do: "The PDF from Elorus is larger than 20 MB."
+
+  defp elorus_error_message(:not_a_pdf), do: "Elorus did not return a PDF for that invoice."
+
+  defp elorus_error_message(:invalid_response),
+    do: "Elorus answered with something unexpected. Try again later."
+
+  defp elorus_error_message(:too_many_pages),
+    do: "Elorus has too many invoices for this month to list."
+
+  defp elorus_error_message(:unknown_transaction),
+    do: "The transaction does not exist any more."
+
+  defp elorus_error_message(:invalid_elorus_invoice),
+    do: "That invoice has no total or date in Elorus."
+
+  defp elorus_error_message(%Ecto.Changeset{} = changeset) do
+    problems =
+      changeset
+      |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
+      |> Enum.map_join(", ", fn {field, messages} ->
+        "#{field |> to_string() |> String.replace("_", " ")} #{Enum.join(List.wrap(messages), ", ")}"
+      end)
+
+    "The invoice from Elorus cannot be stored: #{problems}."
+  end
+
+  defp elorus_error_message({:storage, _reason} = reason) do
+    Logger.error("Storing an invoice PDF from Elorus failed: #{inspect(reason)}")
+    "The PDF could not be stored. Try again."
+  end
+
+  defp elorus_error_message({:unexpected_status, status, _body} = reason) do
+    Logger.warning("Elorus failed: #{inspect(reason)}")
+    "Elorus answered with an unexpected status (#{status}). Try again later."
+  end
+
+  # The request itself failed: a timeout, a refused connection...
+  defp elorus_error_message(%{__exception__: true} = exception) do
+    Logger.warning("Elorus failed: #{Exception.message(exception)}")
+    "Could not reach Elorus. Try again."
+  end
+
+  defp elorus_error_message(reason) do
+    Logger.warning("Elorus failed: #{inspect(reason)}")
+    "Something went wrong with Elorus. Try again."
   end
 
   defp handle_created({:ok, _invoice}, socket) do
@@ -338,35 +526,100 @@ defmodule IkeEmailsWeb.ReconciliationLive do
             />
           </section>
 
-          <section>
-            <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-base-content/60">
-              Or attach one you already have
-            </h3>
-            <.form
-              for={to_form(%{"q" => @suggestion_search}, as: :suggestions)}
-              id="suggestion-search"
-              phx-change="search_suggestions"
-            >
-              <.input
-                name="q"
-                value={@suggestion_search}
-                type="search"
-                placeholder="Search by issuer or number"
-                phx-debounce="250"
-              />
-            </.form>
-            <div id="suggestions" phx-update="stream" class="space-y-2">
-              <p id="suggestions-empty" class="hidden text-sm text-base-content/60 only:block">
-                No invoices to attach.
+          <div class="space-y-8">
+            <section>
+              <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-base-content/60">
+                Attach an existing invoice
+              </h3>
+              <.form
+                for={to_form(%{"q" => @suggestion_search}, as: :suggestions)}
+                id="suggestion-search"
+                phx-change="search_suggestions"
+              >
+                <.input
+                  name="q"
+                  value={@suggestion_search}
+                  type="search"
+                  placeholder="Search by issuer, receiver or number"
+                  phx-debounce="250"
+                />
+              </.form>
+              <div id="suggestions" phx-update="stream" class="space-y-2">
+                <p id="suggestions-empty" class="hidden text-sm text-base-content/60 only:block">
+                  No invoices to attach.
+                </p>
+                <.suggestion
+                  :for={{id, invoice} <- @streams.suggestions}
+                  id={id}
+                  invoice={invoice}
+                  transaction={@transaction}
+                />
+              </div>
+            </section>
+
+            <section :if={income?(@transaction)} id="elorus-section">
+              <h3 class="mb-3 text-sm font-semibold uppercase tracking-wide text-base-content/60">
+                Invoices in Elorus
+              </h3>
+              <.button
+                :if={@elorus_configured?}
+                id="search-elorus"
+                type="button"
+                class="btn btn-sm"
+                phx-click="search_elorus"
+                disabled={@elorus_task != nil}
+              >
+                <.icon name="hero-magnifying-glass" class="size-4" />
+                {if @elorus_task && @elorus_task.action == :search,
+                  do: "Searching...",
+                  else: "Search #{month_title(@month)}"}
+              </.button>
+              <p
+                :if={!@elorus_configured?}
+                id="elorus-unconfigured"
+                class="text-sm text-base-content/60"
+              >
+                Set <code>ELORUS_API_TOKEN</code>
+                and <code>ELORUS_ORGANIZATION_ID</code>
+                to look up invoices in Elorus.
               </p>
-              <.suggestion
-                :for={{id, invoice} <- @streams.suggestions}
-                id={id}
-                invoice={invoice}
-                transaction={@transaction}
-              />
-            </div>
-          </section>
+              <p
+                :if={@elorus_error}
+                id="elorus-error"
+                role="alert"
+                class="mt-3 rounded-lg bg-error/10 px-3 py-2 text-sm text-error"
+              >
+                {@elorus_error}
+              </p>
+              <p
+                :if={@elorus_task && @elorus_task.action == :import}
+                id="elorus-importing"
+                class="mt-3 text-sm text-base-content/60"
+              >
+                Attaching the invoice from Elorus...
+              </p>
+              <%!-- The rows of a stream are not drawn again when a task starts or ends, so the
+                    container says that one runs, and the buttons follow it with CSS --%>
+              <div
+                :if={@elorus_loaded?}
+                id="elorus-invoices"
+                phx-update="stream"
+                data-busy={@elorus_task != nil}
+                class="group mt-3 space-y-2"
+              >
+                <p id="elorus-empty" class="hidden text-sm text-base-content/60 only:block">
+                  No invoices in Elorus for {month_title(@month)}.
+                </p>
+                <.elorus_invoice
+                  :for={{id, invoice} <- @streams.elorus_invoices}
+                  id={id}
+                  invoice={invoice}
+                  transaction={@transaction}
+                  stored={MapSet.member?(@elorus_stored, invoice.id)}
+                />
+              </div>
+            </section>
+          </div>
         </div>
       </.panel>
     </Layouts.app>
@@ -496,6 +749,9 @@ defmodule IkeEmailsWeb.ReconciliationLive do
         >
           <.icon name="hero-document-text" class="size-4 shrink-0 text-primary" />
           <span class="font-medium">{invoice.issuer_name}</span>
+          <span :if={invoice.receiver_name} class="text-base-content/60">
+            → {invoice.receiver_name}
+          </span>
           <span :if={invoice.number} class="text-base-content/60">#{invoice.number}</span>
           <span class="text-base-content/60">{format_date(invoice.date)}</span>
           <.invoice_amount invoice={invoice} />
@@ -604,6 +860,66 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   attr :id, :string, required: true
   attr :invoice, :map, required: true
   attr :transaction, :map, required: true
+  attr :stored, :boolean, required: true
+
+  defp elorus_invoice(assigns) do
+    assigns =
+      assign(assigns, match?: Invoicing.elorus_match?(assigns.invoice, assigns.transaction))
+
+    ~H"""
+    <div id={@id} class="flex items-center gap-3 rounded-lg bg-base-200/60 px-3 py-2 text-sm">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-x-2">
+          <span class="font-medium">{@invoice.client_name}</span>
+          <span
+            :if={@match?}
+            class="rounded-full bg-emerald-500/10 px-2 text-xs font-medium text-emerald-700 dark:text-emerald-300"
+          >
+            same amount
+          </span>
+          <span
+            :if={@stored}
+            class="rounded-full bg-sky-500/10 px-2 text-xs font-medium text-sky-700 dark:text-sky-300"
+          >
+            stored
+          </span>
+        </div>
+        <div class="text-base-content/60">
+          <span :if={@invoice.date}>{format_date(@invoice.date)}            · </span>
+          <span class="tabular-nums">{elorus_total(@invoice)}</span>
+          <span :if={@invoice.representation}> ·            {@invoice.representation}</span>
+          <span :if={@invoice.status}> ·            {@invoice.status}</span>
+        </div>
+      </div>
+      <a
+        :if={@invoice.permalink}
+        href={@invoice.permalink}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="text-primary hover:underline"
+      >
+        Elorus
+      </a>
+      <.button
+        id={"attach-elorus-#{@invoice.id}"}
+        class="btn btn-sm btn-primary btn-soft group-data-[busy]:pointer-events-none group-data-[busy]:opacity-50"
+        phx-click="attach_elorus"
+        phx-value-id={@invoice.id}
+      >
+        Attach
+      </.button>
+    </div>
+    """
+  end
+
+  defp elorus_total(%{total: %Decimal{} = total, currency_code: currency}),
+    do: total |> Money.cents_from_decimal() |> Money.format(currency)
+
+  defp elorus_total(_invoice), do: "-"
+
+  attr :id, :string, required: true
+  attr :invoice, :map, required: true
+  attr :transaction, :map, required: true
 
   defp suggestion(assigns) do
     cents = assigns.transaction.amount |> Money.cents_from_decimal() |> abs()
@@ -615,6 +931,9 @@ defmodule IkeEmailsWeb.ReconciliationLive do
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-x-2">
           <span class="font-medium">{@invoice.issuer_name}</span>
+          <span :if={@invoice.receiver_name} class="text-base-content/60">
+            → {@invoice.receiver_name}
+          </span>
           <span
             :if={@exact?}
             class="rounded-full bg-emerald-500/10 px-2 text-xs font-medium text-emerald-700 dark:text-emerald-300"

@@ -48,6 +48,17 @@ defmodule IkeEmailsWeb.InvoiceLiveTest do
       refute has_element?(view, "#invoices-#{github.id}")
     end
 
+    test "is searched by receiver", %{conn: conn} do
+      issued = invoice_fixture(%{"issuer_name" => "Me", "receiver_name" => "Acme Inc."})
+      other = invoice_fixture(%{"issuer_name" => "Linode"})
+
+      {:ok, view, _html} = live(conn, ~p"/invoices")
+      view |> form("#invoice-search", %{"q" => "acme"}) |> render_change()
+
+      assert has_element?(view, "#invoices-#{issued.id}")
+      refute has_element?(view, "#invoices-#{other.id}")
+    end
+
     test "says when there are none", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/invoices")
 
@@ -95,6 +106,34 @@ defmodule IkeEmailsWeb.InvoiceLiveTest do
       assert {invoice.amount_cents, invoice.currency, invoice.issuer_vat} == {14_638, "USD", nil}
       assert has_element?(view, "#unmatched-#{invoice.id}")
       assert has_element?(view, "#invoices-#{invoice.id}", "146,38 USD")
+    end
+
+    test "takes the receiver of an invoice that you issued", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/invoices/new")
+
+      view
+      |> file_input("#invoice-form", :pdf, [
+        %{name: "mine.pdf", content: pdf_fixture(), type: "application/pdf"}
+      ])
+      |> render_upload("mine.pdf")
+
+      view
+      |> form("#invoice-form",
+        invoice: %{
+          amount_input: "100",
+          date: "2026-10-01",
+          issuer_name: "My Business",
+          receiver_name: "Acme Inc.",
+          receiver_vat: "123 451 234"
+        }
+      )
+      |> render_submit()
+
+      assert_patch(view, ~p"/invoices")
+      assert [invoice] = Invoicing.list_invoices()
+      assert {invoice.receiver_name, invoice.receiver_vat} == {"Acme Inc.", "123451234"}
+      assert has_element?(view, "#invoices-#{invoice.id}", "My Business")
+      assert has_element?(view, "#invoices-#{invoice.id}", "Acme Inc.")
     end
 
     test "needs the PDF and a valid form", %{conn: conn} do

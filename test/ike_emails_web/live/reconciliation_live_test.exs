@@ -333,6 +333,21 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       refute has_element?(view, "#suggestions-#{attached.id}")
     end
 
+    test "shows the receiver of an invoice that was issued, and finds it by it", %{conn: conn} do
+      transaction = transaction_fixture(%{"amount" => "100.00"})
+      issued = invoice_fixture(%{"issuer_name" => "Me", "receiver_name" => "Acme Inc."})
+      other = invoice_fixture(%{"issuer_name" => "Linode"})
+
+      {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
+      assert has_element?(view, "#suggestions-#{issued.id}", "Acme Inc.")
+      refute has_element?(view, "#suggestions-#{other.id}", "→")
+
+      view |> form("#suggestion-search", %{"q" => "acme"}) |> render_change()
+
+      assert has_element?(view, "#suggestions-#{issued.id}")
+      refute has_element?(view, "#suggestions-#{other.id}")
+    end
+
     test "narrows them by search", %{conn: conn} do
       transaction = transaction_fixture()
       linode = invoice_fixture(%{"issuer_name" => "Linode"})

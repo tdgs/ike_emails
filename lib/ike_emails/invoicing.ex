@@ -9,6 +9,7 @@ defmodule IkeEmails.Invoicing do
   require Logger
 
   alias IkeEmails.Banking.Transaction
+  alias IkeEmails.Elorus
   alias IkeEmails.Invoicing.Invoice
   alias IkeEmails.Money
   alias IkeEmails.Repo
@@ -21,7 +22,7 @@ defmodule IkeEmails.Invoicing do
 
   @doc """
   Invoices, newest first, with their transactions. `:search` matches the issuer
-  name or the invoice number.
+  or receiver name, or the invoice number.
   """
   def list_invoices(opts \\ []) do
     Invoice
@@ -38,7 +39,13 @@ defmodule IkeEmails.Invoicing do
 
       term ->
         pattern = "%" <> String.replace(term, ~r/[\\%_]/, "\\\\\\0") <> "%"
-        where(query, [i], ilike(i.issuer_name, ^pattern) or ilike(i.number, ^pattern))
+
+        where(
+          query,
+          [i],
+          ilike(i.issuer_name, ^pattern) or ilike(i.receiver_name, ^pattern) or
+            ilike(i.number, ^pattern)
+        )
     end
   end
 
@@ -85,7 +92,11 @@ defmodule IkeEmails.Invoicing do
   def create_invoice(attrs, pdf, file_name, opts \\ []) when is_binary(pdf) do
     transaction_ids = Keyword.get(opts, :transaction_ids, [])
     file = file_facts(pdf, file_name)
-    changeset = Invoice.create_changeset(%Invoice{}, attrs, file)
+
+    changeset =
+      %Invoice{}
+      |> Invoice.create_changeset(attrs, file)
+      |> put_elorus_id(opts[:elorus_id])
 
     with :ok <- check_pdf(pdf),
          :ok <- check_new(file.file_sha256),
@@ -255,6 +266,192 @@ defmodule IkeEmails.Invoicing do
       }
     end)
     |> Enum.take(20)
+  end
+
+  defp put_elorus_id(changeset, nil), do: changeset
+  defp put_elorus_id(changeset, elorus_id), do: Invoice.put_elorus_id(changeset, elorus_id)
+
+  ## Invoices issued in Elorus
+
+  @doc """
+  The invoices Elorus has for a month (by their issue date, drafts and void
+  ones left out), the ones that could be the invoice of the transaction first.
+  The others keep the order Elorus gave, newest first.
+
+  Errors are those of `IkeEmails.Elorus.list_all_invoices/2`.
+  """
+  def search_elorus(%Transaction{} = transaction, %Date{} = month) do
+    params = [
+      period_from: Date.beginning_of_month(month),
+      period_to: Date.end_of_month(month),
+      draft: false,
+      is_void: false
+    ]
+
+    with {:ok, invoices} <- Elorus.list_all_invoices(params) do
+      {matching, others} = Enum.split_with(invoices, &elorus_match?(&1, transaction))
+      {:ok, matching ++ others}
+    end
+  end
+
+  @doc """
+  Whether an Elorus invoice is for the amount of the transaction, in the currency
+  it was charged in (see `new_invoice_for/1`). The invoice can be for its total or
+  for what is payable, which is less when a tax is withheld.
+  """
+  def elorus_match?(%Elorus.Invoice{} = invoice, %Transaction{} = transaction) do
+    %Invoice{amount_input: input, currency: currency} = new_invoice_for(transaction)
+
+    with true <- invoice.currency_code == currency,
+         {:ok, cents} <- Money.parse_cents(input) do
+      Enum.any?([invoice.total, invoice.payable], &(decimal_cents(&1) == cents))
+    else
+      _ -> false
+    end
+  end
+
+  defp decimal_cents(%Decimal{} = amount), do: Money.cents_from_decimal(amount)
+  defp decimal_cents(_amount), do: nil
+
+  @doc """
+  Which of the Elorus invoices (by id) were imported already.
+  """
+  def imported_elorus_ids([]), do: MapSet.new()
+
+  def imported_elorus_ids(elorus_ids) do
+    Repo.all(from i in Invoice, where: i.elorus_id in ^elorus_ids, select: i.elorus_id)
+    |> MapSet.new()
+  end
+
+  @doc """
+  Makes the Elorus invoice the invoice of the transaction: downloads its PDF,
+  stores it with the invoice, and links the transaction, as an upload would.
+
+  An invoice that was imported before is only attached, and so is the invoice
+  that already holds the same PDF (which is taken as the import of the Elorus
+  invoice, if it was not one). The issuer is the business of the
+  `:business` settings, the receiver the client of the Elorus invoice.
+
+  Returns `{:ok, invoice}`, or `{:error, reason}`: `:business_not_configured`,
+  an `IkeEmails.Elorus` error, or any error of `create_invoice/4`.
+  """
+  def import_elorus_invoice(%Elorus.Invoice{} = elorus_invoice, %Transaction{} = transaction) do
+    case Repo.get_by(Invoice, elorus_id: elorus_invoice.id) do
+      %Invoice{} = invoice -> attach_stored(invoice, transaction)
+      nil -> download_and_create(elorus_invoice, transaction)
+    end
+  end
+
+  defp download_and_create(elorus_invoice, transaction) do
+    with {:ok, business} <- business(),
+         {:ok, attrs} <- elorus_attrs(elorus_invoice, business),
+         :ok <- check_attrs(attrs),
+         {:ok, pdf} <- Elorus.invoice_pdf(elorus_invoice.id) do
+      attrs
+      |> create_invoice(pdf, elorus_file_name(elorus_invoice),
+        transaction_ids: [transaction.id],
+        elorus_id: elorus_invoice.id
+      )
+      |> after_import(elorus_invoice, transaction)
+    end
+  end
+
+  # The same PDF is stored already: that invoice is the one
+  defp after_import({:error, {:duplicate, invoice}}, elorus_invoice, transaction) do
+    invoice |> claim_elorus_id(elorus_invoice.id) |> attach_stored(transaction)
+  end
+
+  # Stored by another import between the checks and the insert: one of the two
+  # unique indexes refused this one, depending on which comes first
+  defp after_import({:error, %Ecto.Changeset{} = changeset} = error, elorus_invoice, transaction) do
+    case stored_in_the_meantime(changeset, elorus_invoice) do
+      %Invoice{} = invoice ->
+        invoice |> claim_elorus_id(elorus_invoice.id) |> attach_stored(transaction)
+
+      nil ->
+        error
+    end
+  end
+
+  defp after_import(result, _elorus_invoice, _transaction), do: result
+
+  defp stored_in_the_meantime(changeset, elorus_invoice) do
+    cond do
+      Keyword.has_key?(changeset.errors, :elorus_id) ->
+        Repo.get_by(Invoice, elorus_id: elorus_invoice.id)
+
+      Keyword.has_key?(changeset.errors, :file_sha256) ->
+        Repo.get_by(Invoice, file_sha256: Ecto.Changeset.get_field(changeset, :file_sha256))
+
+      true ->
+        nil
+    end
+  end
+
+  # An invoice that was uploaded by hand becomes the import of the Elorus invoice,
+  # so that it is not downloaded again. One that belongs to another is left alone.
+  defp claim_elorus_id(%Invoice{elorus_id: nil} = invoice, elorus_id) do
+    case invoice
+         |> Ecto.Changeset.change()
+         |> Invoice.put_elorus_id(elorus_id)
+         |> Repo.update() do
+      {:ok, claimed} -> claimed
+      {:error, _changeset} -> invoice
+    end
+  end
+
+  defp claim_elorus_id(invoice, _elorus_id), do: invoice
+
+  defp attach_stored(invoice, transaction) do
+    with :ok <- attach(invoice, transaction), do: {:ok, get_invoice!(invoice.id)}
+  end
+
+  defp business do
+    settings = Application.get_env(:ike_emails, :business, [])
+
+    case settings[:name] |> to_string() |> String.trim() do
+      "" -> {:error, :business_not_configured}
+      name -> {:ok, %{name: name, vat: settings[:vat]}}
+    end
+  end
+
+  defp elorus_attrs(
+         %Elorus.Invoice{total: %Decimal{} = total, date: %Date{} = date} = e,
+         business
+       ) do
+    {:ok,
+     %{
+       "amount_input" => total |> Money.cents_from_decimal() |> Money.format_input(),
+       "currency" => e.currency_code,
+       "date" => Date.to_iso8601(date),
+       "issuer_name" => business.name,
+       "issuer_vat" => business.vat,
+       "receiver_name" => e.client_name,
+       "receiver_vat" => e.client_vat_number,
+       "number" => elorus_number(e),
+       "notes" => "Imported from Elorus"
+     }}
+  end
+
+  defp elorus_attrs(_elorus_invoice, _business), do: {:error, :invalid_elorus_invoice}
+
+  # Do not download a PDF for an invoice that cannot be stored
+  defp check_attrs(attrs) do
+    changeset = change_invoice(%Invoice{}, attrs)
+    if changeset.valid?, do: :ok, else: {:error, changeset}
+  end
+
+  # The number as it is printed: the sequence "A-" and the number "1" make "A-1"
+  defp elorus_number(%Elorus.Invoice{} = invoice) do
+    case Enum.join(Enum.reject([invoice.sequence_flat, invoice.number], &is_nil/1)) do
+      "" -> nil
+      number -> number
+    end
+  end
+
+  defp elorus_file_name(%Elorus.Invoice{} = invoice) do
+    name = elorus_number(invoice) || invoice.id
+    "elorus-" <> String.replace(name, ~r/[^A-Za-z0-9._-]/u, "_") <> ".pdf"
   end
 
   @doc """

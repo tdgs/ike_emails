@@ -48,6 +48,15 @@ if config_env() != :test and elorus_token not in [nil, ""] do
     demo: demo
 end
 
+# Who you are, as the issuer of the invoices imported from Elorus (Elorus does not
+# tell). The name is needed to import them, the VAT number is optional. The
+# tests have their own, see config/test.exs.
+if config_env() != :test do
+  config :ike_emails, :business,
+    name: System.get_env("BUSINESS_NAME"),
+    vat: System.get_env("BUSINESS_VAT")
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
