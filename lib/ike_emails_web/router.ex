@@ -1,6 +1,8 @@
 defmodule IkeEmailsWeb.Router do
   use IkeEmailsWeb, :router
 
+  import IkeEmailsWeb.UserAuth
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -8,6 +10,7 @@ defmodule IkeEmailsWeb.Router do
     plug :put_root_layout, html: {IkeEmailsWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :fetch_current_scope_for_user
   end
 
   pipeline :api do
@@ -19,15 +22,40 @@ defmodule IkeEmailsWeb.Router do
   end
 
   scope "/", IkeEmailsWeb do
+    pipe_through [:browser, :redirect_if_authenticated]
+
+    get "/login", SessionController, :new
+  end
+
+  scope "/", IkeEmailsWeb do
     pipe_through :browser
 
-    live "/", ReconciliationLive, :index
-    live "/transactions/:id/invoice", ReconciliationLive, :attach
+    post "/login", SessionController, :create
+    delete "/logout", SessionController, :delete
+  end
 
-    live "/invoices", InvoiceLive.Index, :index
-    live "/invoices/new", InvoiceLive.Index, :new
-    live "/invoices/:id/edit", InvoiceLive.Index, :edit
+  scope "/", IkeEmailsWeb do
+    pipe_through [:browser, :require_authenticated_user]
+
+    live_session :require_authenticated_user,
+      on_mount: [{IkeEmailsWeb.UserAuth, :require_authenticated}] do
+      live "/", ReconciliationLive, :index
+      live "/transactions/:id/invoice", ReconciliationLive, :attach
+
+      live "/invoices", InvoiceLive.Index, :index
+      live "/invoices/new", InvoiceLive.Index, :new
+      live "/invoices/:id/edit", InvoiceLive.Index, :edit
+    end
+
     get "/invoices/:id/pdf", InvoicePdfController, :show
+  end
+
+  # The bank crawler logs in with the email and password of a user, and pushes
+  # that user's transactions with the token it gets
+  scope "/api", IkeEmailsWeb do
+    pipe_through :api
+
+    post "/auth/token", ApiTokenController, :create
   end
 
   scope "/api", IkeEmailsWeb do

@@ -33,6 +33,15 @@ defmodule IkeEmails.DataCase do
   end
 
   @doc """
+  Makes a user for the test, `user` and `scope` of it are in the context. Use it
+  as `setup :create_user_scope`.
+  """
+  def create_user_scope(_context) do
+    user = IkeEmails.Fixtures.user_fixture()
+    %{user: user, scope: IkeEmails.Fixtures.user_scope_fixture(user)}
+  end
+
+  @doc """
   Sets up the sandbox based on the test tags.
   """
   def setup_sandbox(tags) do

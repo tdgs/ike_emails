@@ -98,14 +98,6 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  config :ike_emails,
-         :bank_api_token,
-         System.get_env("BANK_API_TOKEN") ||
-           raise("""
-           environment variable BANK_API_TOKEN is missing.
-           It is the bearer token the bank crawler pushes transactions with.
-           """)
-
   config :ike_emails, IkeEmails.Storage.S3,
     bucket:
       System.get_env("S3_BUCKET") ||

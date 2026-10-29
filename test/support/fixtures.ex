@@ -1,12 +1,34 @@
 defmodule IkeEmails.Fixtures do
   @moduledoc """
-  Builds transactions and invoices for the tests.
+  Builds users, transactions and invoices for the tests. The transactions and
+  invoices are made for the user of a scope, see `user_scope_fixture/1`.
   """
 
+  alias IkeEmails.Accounts
+  alias IkeEmails.Accounts.Scope
   alias IkeEmails.Banking
   alias IkeEmails.Invoicing
 
-  def transaction_fixture(attrs \\ %{}) do
+  @doc """
+  A user, with the password `valid_user_password/0`.
+  """
+  def user_fixture(attrs \\ %{}) do
+    n = System.unique_integer([:positive])
+
+    defaults = %{email: "user#{n}@example.com", password: valid_user_password()}
+    {:ok, user} = defaults |> Map.merge(Map.new(attrs)) |> Accounts.register_user()
+
+    user
+  end
+
+  def valid_user_password, do: "a valid password 123"
+
+  @doc """
+  The scope of a user, a new one unless given.
+  """
+  def user_scope_fixture(user \\ nil), do: Scope.for_user(user || user_fixture())
+
+  def transaction_fixture(%Scope{} = scope, attrs \\ %{}) do
     n = System.unique_integer([:positive])
 
     attrs =
@@ -22,8 +44,8 @@ defmodule IkeEmails.Fixtures do
         stringify(attrs)
       )
 
-    {:ok, _status, transaction} = Banking.create_transaction(attrs)
-    Banking.get_transaction!(transaction.id)
+    {:ok, _status, transaction} = Banking.create_transaction(scope, attrs)
+    Banking.get_transaction!(scope, transaction.id)
   end
 
   @doc """
@@ -47,9 +69,9 @@ defmodule IkeEmails.Fixtures do
     )
   end
 
-  def invoice_fixture(attrs \\ %{}, opts \\ []) do
+  def invoice_fixture(%Scope{} = scope, attrs \\ %{}, opts \\ []) do
     {:ok, invoice} =
-      Invoicing.create_invoice(invoice_attrs(attrs), pdf_fixture(), "invoice.pdf", opts)
+      Invoicing.create_invoice(scope, invoice_attrs(attrs), pdf_fixture(), "invoice.pdf", opts)
 
     invoice
   end

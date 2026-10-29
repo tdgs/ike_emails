@@ -21,6 +21,7 @@ defmodule IkeEmails.Banking.Transaction do
     field :no_invoice, :boolean, default: false
     field :no_invoice_note, :string
 
+    belongs_to :user, IkeEmails.Accounts.User
     many_to_many :invoices, Invoice, join_through: "invoice_transactions"
 
     timestamps(type: :utc_datetime)

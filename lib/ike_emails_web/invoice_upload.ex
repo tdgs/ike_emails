@@ -112,7 +112,7 @@ defmodule IkeEmailsWeb.InvoiceUpload do
     do: "Reading the invoice failed. Fill it in by hand."
 
   @doc """
-  What to tell about an error of `IkeEmails.Invoicing.create_invoice/4` that is
+  What to tell about an error of `IkeEmails.Invoicing.create_invoice/5` that is
   not about the form.
   """
   def error_message(:not_a_pdf), do: "That file is not a PDF."

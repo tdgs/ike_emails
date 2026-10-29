@@ -35,4 +35,26 @@ defmodule IkeEmailsWeb.ConnCase do
     IkeEmails.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Makes a user and logs them in. Use it as `setup :register_and_log_in_user`: the
+  context gets the logged in `conn`, and the `user` and their `scope`, to make
+  what they own.
+  """
+  def register_and_log_in_user(%{conn: conn}) do
+    user = IkeEmails.Fixtures.user_fixture()
+
+    %{
+      conn: log_in_user(conn, user),
+      user: user,
+      scope: IkeEmails.Fixtures.user_scope_fixture(user)
+    }
+  end
+
+  @doc """
+  Logs the user in, as the login does: their id is in the session.
+  """
+  def log_in_user(conn, user) do
+    Plug.Test.init_test_session(conn, %{"user_id" => user.id})
+  end
 end

@@ -25,51 +25,55 @@ defmodule IkeEmails.BankingTest do
     "amount" => "-9.00"
   }
 
-  describe "create_transaction/1" do
-    test "stores a transaction" do
-      assert {:ok, :created, transaction} = Banking.create_transaction(@transfer)
+  describe "create_transaction/2" do
+    setup :create_user_scope
+
+    test "stores a transaction", %{scope: scope} do
+      assert {:ok, :created, transaction} = Banking.create_transaction(scope, @transfer)
 
       assert transaction.description == "ΕΝΤΟΛΗ INSTANT TRANS"
       assert transaction.date == ~D[2026-07-07]
       assert Decimal.equal?(transaction.amount, Decimal.new("-14805.43"))
-      assert [^transaction] = Banking.list_transactions()
+      assert [^transaction] = Banking.list_transactions(scope)
     end
 
-    test "stores blank optional fields as nil" do
-      assert {:ok, :created, transaction} = Banking.create_transaction(@transfer)
+    test "stores blank optional fields as nil", %{scope: scope} do
+      assert {:ok, :created, transaction} = Banking.create_transaction(scope, @transfer)
       assert transaction.conversion_details == nil
 
-      assert {:ok, :created, fee} = Banking.create_transaction(@fee)
+      assert {:ok, :created, fee} = Banking.create_transaction(scope, @fee)
       assert fee.sender_details == nil
       assert fee.additional_information == nil
     end
 
-    test "returns the stored transaction when it is pushed again" do
-      assert {:ok, :created, transaction} = Banking.create_transaction(@transfer)
-      assert {:ok, :existing, existing} = Banking.create_transaction(@transfer)
+    test "returns the stored transaction when it is pushed again", %{scope: scope} do
+      assert {:ok, :created, transaction} = Banking.create_transaction(scope, @transfer)
+      assert {:ok, :existing, existing} = Banking.create_transaction(scope, @transfer)
 
       assert existing.id == transaction.id
-      assert length(Banking.list_transactions()) == 1
+      assert length(Banking.list_transactions(scope)) == 1
     end
 
-    test "treats the same amount in another notation as the same transaction" do
-      assert {:ok, :created, transaction} = Banking.create_transaction(@fee)
-      assert {:ok, :existing, existing} = Banking.create_transaction(%{@fee | "amount" => "-9"})
+    test "treats the same amount in another notation as the same transaction", %{scope: scope} do
+      assert {:ok, :created, transaction} = Banking.create_transaction(scope, @fee)
+
+      assert {:ok, :existing, existing} =
+               Banking.create_transaction(scope, %{@fee | "amount" => "-9"})
 
       assert existing.id == transaction.id
     end
 
-    test "stores a transfer and its fee, which share a transaction id" do
-      assert {:ok, :created, transfer} = Banking.create_transaction(@transfer)
-      assert {:ok, :created, fee} = Banking.create_transaction(@fee)
+    test "stores a transfer and its fee, which share a transaction id", %{scope: scope} do
+      assert {:ok, :created, transfer} = Banking.create_transaction(scope, @transfer)
+      assert {:ok, :created, fee} = Banking.create_transaction(scope, @fee)
 
       assert transfer.transaction_id == fee.transaction_id
       assert transfer.id != fee.id
-      assert length(Banking.list_transactions()) == 2
+      assert length(Banking.list_transactions(scope)) == 2
     end
 
-    test "returns an error changeset for missing fields" do
-      assert {:error, changeset} = Banking.create_transaction(%{})
+    test "returns an error changeset for missing fields", %{scope: scope} do
+      assert {:error, changeset} = Banking.create_transaction(scope, %{})
 
       assert %{
                date: ["can't be blank"],
@@ -80,12 +84,12 @@ defmodule IkeEmails.BankingTest do
              } = errors_on(changeset)
     end
 
-    test "returns an error changeset for invalid values" do
+    test "returns an error changeset for invalid values", %{scope: scope} do
       attrs = %{@transfer | "amount" => "lots", "date" => "yesterday"}
 
-      assert {:error, changeset} = Banking.create_transaction(attrs)
+      assert {:error, changeset} = Banking.create_transaction(scope, attrs)
       assert %{amount: ["is invalid"], date: ["is invalid"]} = errors_on(changeset)
-      assert Banking.list_transactions() == []
+      assert Banking.list_transactions(scope) == []
     end
   end
 end

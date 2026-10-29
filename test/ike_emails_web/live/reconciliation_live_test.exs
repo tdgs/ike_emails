@@ -8,12 +8,14 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
   alias IkeEmails.Invoicing
   alias IkeEmails.Storage.InMemory
 
+  setup :register_and_log_in_user
+
   defp row(transaction), do: "#transactions-#{transaction.id}"
 
   describe "the month" do
-    test "defaults to the latest month with transactions", %{conn: conn} do
-      september = transaction_fixture(%{"date" => "2026-09-14"})
-      october = transaction_fixture(%{"date" => "2026-10-12"})
+    test "defaults to the latest month with transactions", %{conn: conn, scope: scope} do
+      september = transaction_fixture(scope, %{"date" => "2026-09-14"})
+      october = transaction_fixture(scope, %{"date" => "2026-10-12"})
 
       {:ok, view, _html} = live(conn, ~p"/")
 
@@ -22,9 +24,12 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       refute has_element?(view, row(september))
     end
 
-    test "is chosen with the month param, and falls back when it is not one", %{conn: conn} do
-      september = transaction_fixture(%{"date" => "2026-09-14"})
-      october = transaction_fixture(%{"date" => "2026-10-12"})
+    test "is chosen with the month param, and falls back when it is not one", %{
+      conn: conn,
+      scope: scope
+    } do
+      september = transaction_fixture(scope, %{"date" => "2026-09-14"})
+      october = transaction_fixture(scope, %{"date" => "2026-10-12"})
 
       {:ok, view, _html} = live(conn, ~p"/?month=2026-09")
       assert has_element?(view, "#month-title", "September 2026")
@@ -35,9 +40,9 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert has_element?(view, "#month-title", "October 2026")
     end
 
-    test "moves to the previous and next month", %{conn: conn} do
-      september = transaction_fixture(%{"date" => "2026-09-14"})
-      transaction_fixture(%{"date" => "2026-10-12"})
+    test "moves to the previous and next month", %{conn: conn, scope: scope} do
+      september = transaction_fixture(scope, %{"date" => "2026-09-14"})
+      transaction_fixture(scope, %{"date" => "2026-10-12"})
 
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
@@ -49,9 +54,9 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert_patch(view, ~p"/?month=2026-10")
     end
 
-    test "jumps to a month from the list", %{conn: conn} do
-      september = transaction_fixture(%{"date" => "2026-09-14"})
-      transaction_fixture(%{"date" => "2026-10-12"})
+    test "jumps to a month from the list", %{conn: conn, scope: scope} do
+      september = transaction_fixture(scope, %{"date" => "2026-09-14"})
+      transaction_fixture(scope, %{"date" => "2026-10-12"})
 
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
@@ -70,14 +75,18 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
   end
 
   describe "the transactions" do
-    test "show their status", %{conn: conn} do
-      missing = transaction_fixture(%{"amount" => "-90.00"})
-      income = transaction_fixture(%{"amount" => "594.40"})
-      invoiced = transaction_fixture(%{"amount" => "-30.00"})
-      Invoicing.attach(invoice_fixture(), invoiced)
+    test "show their status", %{conn: conn, scope: scope} do
+      missing = transaction_fixture(scope, %{"amount" => "-90.00"})
+      income = transaction_fixture(scope, %{"amount" => "594.40"})
+      invoiced = transaction_fixture(scope, %{"amount" => "-30.00"})
+      Invoicing.attach(scope, invoice_fixture(scope), invoiced)
 
       {:ok, exempt} =
-        Banking.mark_no_invoice(transaction_fixture(%{"amount" => "-5.00"}), "bank fee")
+        Banking.mark_no_invoice(
+          scope,
+          transaction_fixture(scope, %{"amount" => "-5.00"}),
+          "bank fee"
+        )
 
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
@@ -87,11 +96,11 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert has_element?(view, "#status-#{exempt.id}[data-status=exempt]")
     end
 
-    test "summarise the month", %{conn: conn} do
-      transaction_fixture(%{"amount" => "-90.00"})
-      transaction_fixture(%{"amount" => "-4.51"})
-      invoiced = transaction_fixture(%{"amount" => "-30.00"})
-      Invoicing.attach(invoice_fixture(), invoiced)
+    test "summarise the month", %{conn: conn, scope: scope} do
+      transaction_fixture(scope, %{"amount" => "-90.00"})
+      transaction_fixture(scope, %{"amount" => "-4.51"})
+      invoiced = transaction_fixture(scope, %{"amount" => "-30.00"})
+      Invoicing.attach(scope, invoice_fixture(scope), invoiced)
 
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
@@ -101,9 +110,11 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert has_element?(view, "#reconciled-count", "1 of 3 payments reconciled")
     end
 
-    test "list their invoices, with a link to the PDF", %{conn: conn} do
-      transaction = transaction_fixture()
-      invoice = invoice_fixture(%{"issuer_name" => "Elorus"}, transaction_ids: [transaction.id])
+    test "list their invoices, with a link to the PDF", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
+
+      invoice =
+        invoice_fixture(scope, %{"issuer_name" => "Elorus"}, transaction_ids: [transaction.id])
 
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
@@ -115,23 +126,23 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
              )
     end
 
-    test "can have an invoice detached", %{conn: conn} do
-      transaction = transaction_fixture()
-      invoice = invoice_fixture(%{}, transaction_ids: [transaction.id])
+    test "can have an invoice detached", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
+      invoice = invoice_fixture(scope, %{}, transaction_ids: [transaction.id])
 
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
       view |> element("#detach-#{transaction.id}-#{invoice.id}") |> render_click()
 
       assert has_element?(view, "#status-#{transaction.id}[data-status=missing]")
       refute has_element?(view, "#{row(transaction)}-invoice-#{invoice.id}")
-      assert Banking.get_transaction!(transaction.id).invoices == []
-      assert Invoicing.get_invoice!(invoice.id)
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
+      assert Invoicing.get_invoice!(scope, invoice.id)
     end
   end
 
   describe "marking a transaction as needing no invoice" do
-    test "takes an optional reason, and can be undone", %{conn: conn} do
-      transaction = transaction_fixture(%{"amount" => "-1157.98"})
+    test "takes an optional reason, and can be undone", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope, %{"amount" => "-1157.98"})
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
       view
@@ -146,13 +157,13 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       view |> element("#clear-no-invoice-#{transaction.id}") |> render_click()
 
       assert has_element?(view, "#status-#{transaction.id}[data-status=missing]")
-      transaction = Banking.get_transaction!(transaction.id)
+      transaction = Banking.get_transaction!(scope, transaction.id)
       assert transaction.no_invoice == false
       assert transaction.no_invoice_note == nil
     end
 
-    test "works without a reason", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "works without a reason", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
       view |> form("#no-invoice-form-#{transaction.id}", exempt: %{note: "  "}) |> render_submit()
@@ -161,16 +172,16 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert has_element?(view, "#{row(transaction)}-note")
       assert has_element?(view, "#clear-no-invoice-#{transaction.id}")
 
-      transaction = Banking.get_transaction!(transaction.id)
+      transaction = Banking.get_transaction!(scope, transaction.id)
       assert transaction.no_invoice == true
       assert transaction.no_invoice_note == nil
     end
 
-    test "refuses a transaction that got an invoice meanwhile", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "refuses a transaction that got an invoice meanwhile", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
-      :ok = Invoicing.attach(invoice_fixture(), transaction)
+      :ok = Invoicing.attach(scope, invoice_fixture(scope), transaction)
 
       view
       |> form("#no-invoice-form-#{transaction.id}", exempt: %{note: "tax"})
@@ -178,11 +189,11 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
 
       assert has_element?(view, "#flash-error")
       assert has_element?(view, "#status-#{transaction.id}[data-status=invoiced]")
-      assert Banking.get_transaction!(transaction.id).no_invoice == false
+      assert Banking.get_transaction!(scope, transaction.id).no_invoice == false
     end
 
-    test "refuses a reason that is too long", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "refuses a reason that is too long", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
       view
@@ -195,8 +206,12 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
   end
 
   describe "adding an invoice to a transaction" do
-    test "opens a panel that suggests the amount and currency of the transaction", %{conn: conn} do
-      transaction = transaction_fixture(%{"amount" => "-193.44", "value_date" => "2026-10-09"})
+    test "opens a panel that suggests the amount and currency of the transaction", %{
+      conn: conn,
+      scope: scope
+    } do
+      transaction =
+        transaction_fixture(scope, %{"amount" => "-193.44", "value_date" => "2026-10-09"})
 
       {:ok, view, _html} = live(conn, ~p"/")
       view |> element("#add-invoice-#{transaction.id}") |> render_click()
@@ -213,9 +228,9 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert has_element?(view, "#invoice-form input[name='invoice[date]'][value='2026-10-09']")
     end
 
-    test "suggests the foreign currency a charge was converted from", %{conn: conn} do
+    test "suggests the foreign currency a charge was converted from", %{conn: conn, scope: scope} do
       transaction =
-        transaction_fixture(%{"amount" => "-18.01", "conversion_details" => "20,00 USD"})
+        transaction_fixture(scope, %{"amount" => "-18.01", "conversion_details" => "20,00 USD"})
 
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
@@ -227,8 +242,8 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert has_element?(view, "#invoice-form input[name='invoice[currency]'][value=USD]")
     end
 
-    test "closing the panel goes back to the month", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "closing the panel goes back to the month", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
       view |> element("#attach-panel-close") |> render_click()
@@ -237,8 +252,11 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       refute has_element?(view, "#attach-panel")
     end
 
-    test "uploads a PDF and matches the new invoice to the transaction", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "uploads a PDF and matches the new invoice to the transaction", %{
+      conn: conn,
+      scope: scope
+    } do
+      transaction = transaction_fixture(scope)
       pdf = pdf_fixture()
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
@@ -255,35 +273,38 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       assert has_element?(view, "#{row(transaction)}", "Elorus")
       assert render(view) =~ "Invoice added."
 
-      assert [invoice] = Banking.get_transaction!(transaction.id).invoices
+      assert [invoice] = Banking.get_transaction!(scope, transaction.id).invoices
       assert invoice.amount_cents == 19_344
       assert invoice.file_name == "elorus.pdf"
       assert {^pdf, "application/pdf"} = InMemory.get(invoice.file_key)
     end
 
-    test "needs the PDF", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "needs the PDF", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
       view |> form("#invoice-form", invoice: %{issuer_name: "Elorus"}) |> render_submit()
 
       assert has_element?(view, "#invoice-form-pdf-error")
-      assert Banking.get_transaction!(transaction.id).invoices == []
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
     end
 
-    test "rejects a file that is not a PDF", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "rejects a file that is not a PDF", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
       upload_pdf(view, "invoice.pdf", "this is not a pdf")
       view |> form("#invoice-form", invoice: %{issuer_name: "Elorus"}) |> render_submit()
 
       assert has_element?(view, "#invoice-form-pdf-error", "not a PDF")
-      assert Banking.get_transaction!(transaction.id).invoices == []
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
     end
 
-    test "shows the mistakes of the form and keeps the file for the next try", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "shows the mistakes of the form and keeps the file for the next try", %{
+      conn: conn,
+      scope: scope
+    } do
+      transaction = transaction_fixture(scope)
       pdf = pdf_fixture()
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
@@ -291,40 +312,43 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
 
       html = view |> form("#invoice-form", invoice: %{issuer_name: ""}) |> render_submit()
       assert html =~ "can&#39;t be blank"
-      assert Banking.get_transaction!(transaction.id).invoices == []
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
 
       view |> form("#invoice-form", invoice: %{issuer_name: "Elorus"}) |> render_submit()
 
       assert_patch(view, ~p"/?month=2026-10")
-      assert [_invoice] = Banking.get_transaction!(transaction.id).invoices
+      assert [_invoice] = Banking.get_transaction!(scope, transaction.id).invoices
     end
 
-    test "offers to attach the invoice when the same PDF was uploaded before", %{conn: conn} do
+    test "offers to attach the invoice when the same PDF was uploaded before", %{
+      conn: conn,
+      scope: scope
+    } do
       pdf = pdf_fixture()
-      {:ok, existing} = Invoicing.create_invoice(invoice_attrs(), pdf, "elorus.pdf")
-      transaction = transaction_fixture()
+      {:ok, existing} = Invoicing.create_invoice(scope, invoice_attrs(), pdf, "elorus.pdf")
+      transaction = transaction_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
       upload_pdf(view, "again.pdf", pdf)
       view |> form("#invoice-form", invoice: %{issuer_name: "Elorus"}) |> render_submit()
 
       assert has_element?(view, "#duplicate-notice", "Elorus")
-      assert Banking.get_transaction!(transaction.id).invoices == []
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
 
       view |> element("#attach-duplicate") |> render_click()
 
       assert_patch(view, ~p"/?month=2026-10")
-      assert [%{id: id}] = Banking.get_transaction!(transaction.id).invoices
+      assert [%{id: id}] = Banking.get_transaction!(scope, transaction.id).invoices
       assert id == existing.id
     end
   end
 
   describe "attaching an existing invoice" do
-    test "lists the invoices that could belong to the transaction", %{conn: conn} do
-      transaction = transaction_fixture(%{"amount" => "-193.44"})
-      exact = invoice_fixture(%{"amount_input" => "193,44"})
-      other = invoice_fixture(%{"amount_input" => "5", "issuer_name" => "Linode"})
-      attached = invoice_fixture(%{}, transaction_ids: [transaction.id])
+    test "lists the invoices that could belong to the transaction", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope, %{"amount" => "-193.44"})
+      exact = invoice_fixture(scope, %{"amount_input" => "193,44"})
+      other = invoice_fixture(scope, %{"amount_input" => "5", "issuer_name" => "Linode"})
+      attached = invoice_fixture(scope, %{}, transaction_ids: [transaction.id])
 
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
@@ -333,10 +357,13 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       refute has_element?(view, "#suggestions-#{attached.id}")
     end
 
-    test "shows the receiver of an invoice that was issued, and finds it by it", %{conn: conn} do
-      transaction = transaction_fixture(%{"amount" => "100.00"})
-      issued = invoice_fixture(%{"issuer_name" => "Me", "receiver_name" => "Acme Inc."})
-      other = invoice_fixture(%{"issuer_name" => "Linode"})
+    test "shows the receiver of an invoice that was issued, and finds it by it", %{
+      conn: conn,
+      scope: scope
+    } do
+      transaction = transaction_fixture(scope, %{"amount" => "100.00"})
+      issued = invoice_fixture(scope, %{"issuer_name" => "Me", "receiver_name" => "Acme Inc."})
+      other = invoice_fixture(scope, %{"issuer_name" => "Linode"})
 
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
       assert has_element?(view, "#suggestions-#{issued.id}", "Acme Inc.")
@@ -348,10 +375,10 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       refute has_element?(view, "#suggestions-#{other.id}")
     end
 
-    test "narrows them by search", %{conn: conn} do
-      transaction = transaction_fixture()
-      linode = invoice_fixture(%{"issuer_name" => "Linode"})
-      github = invoice_fixture(%{"issuer_name" => "GitHub"})
+    test "narrows them by search", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
+      linode = invoice_fixture(scope, %{"issuer_name" => "Linode"})
+      github = invoice_fixture(scope, %{"issuer_name" => "GitHub"})
 
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
       view |> form("#suggestion-search", %{"q" => "git"}) |> render_change()
@@ -360,16 +387,16 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       refute has_element?(view, "#suggestions-#{linode.id}")
     end
 
-    test "matches the chosen invoice to the transaction", %{conn: conn} do
-      transaction = transaction_fixture()
-      invoice = invoice_fixture()
+    test "matches the chosen invoice to the transaction", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
+      invoice = invoice_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
 
       view |> element("#attach-existing-#{invoice.id}") |> render_click()
 
       assert_patch(view, ~p"/?month=2026-10")
       assert has_element?(view, "#status-#{transaction.id}[data-status=invoiced]")
-      assert [%{id: id}] = Banking.get_transaction!(transaction.id).invoices
+      assert [%{id: id}] = Banking.get_transaction!(scope, transaction.id).invoices
       assert id == invoice.id
     end
   end

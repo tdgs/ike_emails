@@ -51,7 +51,7 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
   end
 
   defp apply_action(socket, :edit, %{"id" => id}) do
-    invoice = Invoicing.get_invoice!(id)
+    invoice = Invoicing.get_invoice!(socket.assigns.current_scope, id)
 
     socket
     |> assign(:invoice, invoice)
@@ -60,7 +60,10 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
   end
 
   defp load_invoices(socket) do
-    stream(socket, :invoices, Invoicing.list_invoices(search: socket.assigns.search), reset: true)
+    invoices =
+      Invoicing.list_invoices(socket.assigns.current_scope, search: socket.assigns.search)
+
+    stream(socket, :invoices, invoices, reset: true)
   end
 
   # A PDF that is still being read is forgotten: the result would be for another
@@ -84,7 +87,11 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
   end
 
   def handle_event("delete", %{"id" => id}, socket) do
-    {:ok, invoice} = id |> Invoicing.get_invoice!() |> Invoicing.delete_invoice()
+    scope = socket.assigns.current_scope
+
+    {:ok, invoice} =
+      scope |> Invoicing.get_invoice!(id) |> then(&Invoicing.delete_invoice(scope, &1))
+
     {:noreply, stream_delete(socket, :invoices, invoice)}
   end
 
@@ -128,7 +135,7 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
   end
 
   def handle_event("save", %{"invoice" => params}, %{assigns: %{live_action: :edit}} = socket) do
-    case Invoicing.update_invoice(socket.assigns.invoice, params) do
+    case Invoicing.update_invoice(socket.assigns.current_scope, socket.assigns.invoice, params) do
       {:ok, _invoice} ->
         {:noreply,
          socket |> put_flash(:info, "Invoice updated.") |> push_patch(to: ~p"/invoices")}
@@ -143,7 +150,9 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
 
     with {:valid, true} <- {:valid, changeset.valid?},
          {:ok, {pdf, name}} <- InvoiceUpload.read_pdf(socket) do
-      params |> Invoicing.create_invoice(pdf, name) |> handle_created(socket)
+      socket.assigns.current_scope
+      |> Invoicing.create_invoice(params, pdf, name)
+      |> handle_created(socket)
     else
       {:valid, false} ->
         {:noreply,
@@ -223,7 +232,7 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:invoices}>
+    <Layouts.app flash={@flash} current_scope={@current_scope} active={:invoices}>
       <.header>
         Invoices
         <:subtitle>Every expense with its PDF, and the payments it is matched to.</:subtitle>

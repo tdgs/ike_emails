@@ -4,7 +4,7 @@ defmodule IkeEmailsWeb.TransactionController do
   alias IkeEmails.Banking
 
   def create(conn, params) do
-    case Banking.create_transaction(params) do
+    case Banking.create_transaction(conn.assigns.current_scope, params) do
       {:ok, :created, transaction} ->
         conn
         |> put_status(:created)

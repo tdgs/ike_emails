@@ -58,6 +58,7 @@ defmodule IkeEmails.MixProject do
        app: false,
        compile: false,
        depth: 1},
+      {:bcrypt_elixir, "~> 3.0"},
       {:swoosh, "~> 1.16"},
       {:req, "~> 0.5"},
       {:req_s3, "~> 0.2.5"},
