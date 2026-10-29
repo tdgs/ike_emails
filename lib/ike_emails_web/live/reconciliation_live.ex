@@ -970,10 +970,10 @@ defmodule IkeEmailsWeb.ReconciliationLive do
           </span>
         </div>
         <div class="text-base-content/60">
-          <span :if={@invoice.date}>{format_date(@invoice.date)}                  · </span>
+          <span :if={@invoice.date}>{"#{format_date(@invoice.date)} · "}</span>
           <span class="tabular-nums">{elorus_total(@invoice)}</span>
-          <span :if={@invoice.representation}> ·                  {@invoice.representation}</span>
-          <span :if={@invoice.status}> ·                  {@invoice.status}</span>
+          <span :if={@invoice.representation}>{" · #{@invoice.representation}"}</span>
+          <span :if={@invoice.status}>{" · #{@invoice.status}"}</span>
         </div>
       </div>
       <a
