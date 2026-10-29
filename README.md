@@ -10,12 +10,16 @@ The invoice PDFs are stored in S3. Locally that is a SeaweedFS container
   (`mix storage.setup` does only that)
 * Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser:
+Now you can visit [`localhost:4000`](http://localhost:4000) from your browser. Log in
+first: `mix setup` makes the user `dev@example.com` with the password
+`dev-password-123` in development.
 
 * `/` is the monthly reconciliation: the transactions of a month, each with its
   invoices. A transaction gets an invoice by uploading its PDF or attaching one
   that exists, or is marked "no invoice needed" with a reason (tax, dividends, ...).
 * `/invoices` lists every invoice, and uploads one before its payment is known.
+
+Everything belongs to a user: each user sees only their own transactions and invoices.
 
 `mix test` needs no S3 server; `mix test --include s3` also tests the S3 adapter
 against the local one.
@@ -48,16 +52,48 @@ button is clicked. Without `AI_MODEL` the feature is off.
 In production the PDFs go to S3 or a compatible server, configured with the
 environment variables `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 and `AWS_REGION` (and `AWS_ENDPOINT_URL_S3` for a server that is not AWS).
-There is no login yet: do not expose the app before adding one.
+
+The Elorus and `BUSINESS_NAME` settings are shared: every user works on the same Elorus
+organization.
+
+## Users
+
+There is no sign-up page: users are created from the command line, with a password of
+at least 12 characters.
+
+    mix user.create me@example.com 'a long password'
+
+In production, where there is no Mix, use the release (on Fly:
+`fly ssh console -C "/app/bin/ike_emails eval '...'"`):
+
+    bin/ike_emails eval 'IkeEmails.Release.create_user("me@example.com", "a long password")'
+
+There is no password reset yet. Do not delete a user to start over: their transactions
+and invoices go with them.
 
 Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
 
 ## API
 
-The bank crawler pushes bank transactions, one per request:
+The bank crawler logs in as a user, and pushes that user's bank transactions. It trades
+the email and password for a token:
+
+    POST /api/auth/token
+    Content-Type: application/json
+
+    {"email": "me@example.com", "password": "a long password"}
+
+* `200` `{"data": {"token": "...", "token_type": "Bearer", "expires_in": 86400}}`
+* `401` the email or the password is wrong, or missing.
+
+The token is good for 24 hours (`expires_in`, in seconds), after which the crawler asks
+for another. It is signed with the `SECRET_KEY_BASE`, so changing that revokes every
+token.
+
+It pushes the bank transactions with the token, one per request:
 
     POST /api/transactions
-    Authorization: Bearer <BANK_API_TOKEN>
+    Authorization: Bearer <token>
     Content-Type: application/json
 
     {"date": "2026-10-19", "value_date": "2026-10-17", "description": "ANTHROPIC* CLAUDE SU",
@@ -74,10 +110,10 @@ last three fields are optional.
   the bank books a transfer and its fee under the same `transaction_id`. Pushing
   a statement again is therefore safe.
 * `422` invalid fields: `{"errors": {"amount": ["is invalid"]}}`.
-* `401` missing or wrong token.
+* `401` missing, wrong or expired token.
 
-The token is read from the `BANK_API_TOKEN` environment variable in production,
-and is `dev-bank-api-token` in development.
+The transaction is stored for the user of the token. Two users can have the same
+`(transaction_id, amount, description)`.
 
 ## Learn more
 

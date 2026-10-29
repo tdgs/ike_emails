@@ -15,6 +15,8 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
   # The tasks that read the PDFs, and the failures they cause, are logged
   @moduletag :capture_log
 
+  setup :register_and_log_in_user
+
   defp upload_pdf(view, name, content) do
     view
     |> file_input("#invoice-form", :pdf, [
@@ -46,8 +48,8 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
 
   for {page, open} <- [{"new invoice", :new_invoice_page}, {"attach panel", :attach_panel}] do
     describe "on the #{page} page" do
-      setup %{conn: conn} do
-        transaction = transaction_fixture()
+      setup %{conn: conn, scope: scope} do
+        transaction = transaction_fixture(scope)
 
         view =
           case unquote(open) do
@@ -92,7 +94,7 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
         refute has_element?(view, "#invoice-form-extract-error")
       end
 
-      test "still saves the PDF with the invoice afterwards", %{view: view} do
+      test "still saves the PDF with the invoice afterwards", %{view: view, scope: scope} do
         pdf = pdf_fixture()
         InvoiceExtractorStub.stub({:ok, found()})
 
@@ -102,7 +104,7 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
 
         view |> form("#invoice-form") |> render_submit()
 
-        assert [invoice] = Invoicing.list_invoices()
+        assert [invoice] = Invoicing.list_invoices(scope)
 
         assert {invoice.amount_cents, invoice.currency, invoice.issuer_name, invoice.number} ==
                  {14_638, "USD", "GitHub, Inc.", "GH-1001"}
@@ -175,8 +177,8 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
   end
 
   describe "on the attach panel" do
-    test "tells the model what the bank shows", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "tells the model what the bank shows", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       InvoiceExtractorStub.stub({:ok, found()})
 
       view = attach_panel(conn, transaction)
@@ -188,8 +190,8 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
       assert prompt =~ "amount 193,44, currency EUR, date 2026-10-12"
     end
 
-    test "matches the invoice that was read to the transaction", %{conn: conn} do
-      transaction = transaction_fixture()
+    test "matches the invoice that was read to the transaction", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
       InvoiceExtractorStub.stub({:ok, found()})
 
       view = attach_panel(conn, transaction)
@@ -199,13 +201,16 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
       view |> form("#invoice-form") |> render_submit()
 
       assert_patch(view, ~p"/?month=2026-10")
-      assert [invoice] = Banking.get_transaction!(transaction.id).invoices
+      assert [invoice] = Banking.get_transaction!(scope, transaction.id).invoices
       assert invoice.issuer_name == "GitHub, Inc."
     end
 
-    test "forgets the result when another transaction is opened meanwhile", %{conn: conn} do
-      first = transaction_fixture()
-      second = transaction_fixture()
+    test "forgets the result when another transaction is opened meanwhile", %{
+      conn: conn,
+      scope: scope
+    } do
+      first = transaction_fixture(scope)
+      second = transaction_fixture(scope)
       InvoiceExtractorStub.hold({:ok, found()})
 
       view = attach_panel(conn, first)

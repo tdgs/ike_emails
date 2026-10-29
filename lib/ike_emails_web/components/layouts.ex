@@ -43,13 +43,28 @@ defmodule IkeEmailsWeb.Layouts do
           <.icon name="hero-document-check" class="size-5 text-primary" /> IkeEmails
         </.link>
         <nav class="flex flex-1 items-center gap-1 text-sm">
-          <.nav_link navigate={~p"/"} active={@active == :reconciliation} id="nav-reconciliation">
-            Reconciliation
-          </.nav_link>
-          <.nav_link navigate={~p"/invoices"} active={@active == :invoices} id="nav-invoices">
-            Invoices
-          </.nav_link>
+          <%= if @current_scope do %>
+            <.nav_link navigate={~p"/"} active={@active == :reconciliation} id="nav-reconciliation">
+              Reconciliation
+            </.nav_link>
+            <.nav_link navigate={~p"/invoices"} active={@active == :invoices} id="nav-invoices">
+              Invoices
+            </.nav_link>
+          <% end %>
         </nav>
+        <div :if={@current_scope} class="flex items-center gap-3 text-sm">
+          <span id="current-user" class="hidden text-base-content/60 sm:inline">
+            {@current_scope.user.email}
+          </span>
+          <.link
+            href={~p"/logout"}
+            method="delete"
+            id="logout"
+            class="rounded-md px-3 py-1.5 font-medium text-base-content/60 transition-colors hover:bg-base-200/60 hover:text-base-content"
+          >
+            Log out
+          </.link>
+        </div>
         <.theme_toggle />
       </div>
     </header>

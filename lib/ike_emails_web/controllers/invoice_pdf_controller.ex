@@ -7,7 +7,7 @@ defmodule IkeEmailsWeb.InvoicePdfController do
   The PDFs are in S3: send the browser there with a link that expires.
   """
   def show(conn, %{"id" => id}) do
-    invoice = Invoicing.get_invoice!(id)
+    invoice = Invoicing.get_invoice!(conn.assigns.current_scope, id)
     redirect(conn, external: Invoicing.pdf_url(invoice))
   end
 end

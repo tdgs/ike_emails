@@ -1,8 +1,5 @@
 import Config
 
-# Bearer token for the bank crawler, see IkeEmailsWeb.Plugs.ApiAuth
-config :ike_emails, :bank_api_token, "dev-bank-api-token"
-
 # Configure your database
 config :ike_emails, IkeEmails.Repo,
   username: "postgres",

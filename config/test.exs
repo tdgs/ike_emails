@@ -1,6 +1,7 @@
 import Config
 
-config :ike_emails, :bank_api_token, "test-bank-api-token"
+# Hash passwords with the least work, the tests make many users
+config :bcrypt_elixir, log_rounds: 1
 
 # Invoice PDFs are kept in memory, see test/support/storage_in_memory.ex
 config :ike_emails, IkeEmails.Storage, adapter: IkeEmails.Storage.InMemory

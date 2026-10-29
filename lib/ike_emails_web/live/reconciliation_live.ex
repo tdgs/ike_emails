@@ -41,13 +41,13 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   @impl true
   def handle_params(params, _uri, socket) do
     socket = open_transaction(socket, socket.assigns.live_action, params)
-    month = month_from(params["month"], socket.assigns.transaction)
+    month = month_from(socket.assigns.current_scope, params["month"], socket.assigns.transaction)
 
     {:noreply, load_month(socket, month)}
   end
 
   defp open_transaction(socket, :attach, %{"id" => id}) do
-    transaction = Banking.get_transaction!(id)
+    transaction = Banking.get_transaction!(socket.assigns.current_scope, id)
     prefill = Invoicing.new_invoice_for(transaction)
 
     socket
@@ -66,30 +66,31 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     socket |> assign(:transaction, nil) |> reset_elorus() |> reset_extract()
   end
 
-  defp month_from(param, transaction) do
+  defp month_from(scope, param, transaction) do
     with param when is_binary(param) <- param,
          {:ok, date} <- Date.from_iso8601(param <> "-01") do
       date
     else
-      _ -> default_month(transaction)
+      _ -> default_month(scope, transaction)
     end
   end
 
-  defp default_month(%{date: date}), do: Date.beginning_of_month(date)
+  defp default_month(_scope, %{date: date}), do: Date.beginning_of_month(date)
 
-  defp default_month(nil) do
-    case Banking.months_with_transactions() do
+  defp default_month(scope, nil) do
+    case Banking.months_with_transactions(scope) do
       [latest | _] -> latest
       [] -> Date.beginning_of_month(Date.utc_today())
     end
   end
 
   defp load_month(socket, month) do
-    transactions = Banking.list_transactions_for_month(month.year, month.month)
+    scope = socket.assigns.current_scope
+    transactions = Banking.list_transactions_for_month(scope, month.year, month.month)
 
     socket
     |> assign(:month, month)
-    |> assign(:months, Banking.months_with_transactions())
+    |> assign(:months, Banking.months_with_transactions(scope))
     |> assign(:summary, Banking.month_summary(transactions))
     |> stream(:transactions, transactions, reset: true)
   end
@@ -98,7 +99,11 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   defp load_suggestions(socket) do
     suggestions =
-      Invoicing.suggest_invoices(socket.assigns.transaction, socket.assigns.suggestion_search)
+      Invoicing.suggest_invoices(
+        socket.assigns.current_scope,
+        socket.assigns.transaction,
+        socket.assigns.suggestion_search
+      )
 
     stream(socket, :suggestions, suggestions, reset: true)
   end
@@ -143,9 +148,10 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   end
 
   def handle_event("mark_no_invoice", %{"exempt" => %{"id" => id, "note" => note}}, socket) do
-    transaction = Banking.get_transaction!(id)
+    scope = socket.assigns.current_scope
+    transaction = Banking.get_transaction!(scope, id)
 
-    case Banking.mark_no_invoice(transaction, note) do
+    case Banking.mark_no_invoice(scope, transaction, note) do
       {:ok, _transaction} ->
         {:noreply, refresh(socket)}
 
@@ -158,7 +164,11 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   end
 
   def handle_event("clear_no_invoice", %{"id" => id}, socket) do
-    {:ok, _transaction} = id |> Banking.get_transaction!() |> Banking.clear_no_invoice()
+    scope = socket.assigns.current_scope
+
+    {:ok, _transaction} =
+      scope |> Banking.get_transaction!(id) |> then(&Banking.clear_no_invoice(scope, &1))
+
     {:noreply, refresh(socket)}
   end
 
@@ -167,10 +177,13 @@ defmodule IkeEmailsWeb.ReconciliationLive do
         %{"invoice-id" => invoice_id, "transaction-id" => transaction_id},
         socket
       ) do
+    scope = socket.assigns.current_scope
+
     :ok =
       Invoicing.detach(
-        Invoicing.get_invoice!(invoice_id),
-        Banking.get_transaction!(transaction_id)
+        scope,
+        Invoicing.get_invoice!(scope, invoice_id),
+        Banking.get_transaction!(scope, transaction_id)
       )
 
     {:noreply, refresh(socket)}
@@ -222,8 +235,8 @@ defmodule IkeEmailsWeb.ReconciliationLive do
          {:ok, {pdf, name}} <- InvoiceUpload.read_pdf(socket) do
       transaction_ids = [socket.assigns.transaction.id]
 
-      params
-      |> Invoicing.create_invoice(pdf, name, transaction_ids: transaction_ids)
+      socket.assigns.current_scope
+      |> Invoicing.create_invoice(params, pdf, name, transaction_ids: transaction_ids)
       |> handle_created(socket)
     else
       {:valid, false} ->
@@ -241,8 +254,9 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   end
 
   def handle_event("attach_existing", %{"id" => invoice_id}, socket) do
-    invoice = Invoicing.get_invoice!(invoice_id)
-    :ok = Invoicing.attach(invoice, socket.assigns.transaction)
+    scope = socket.assigns.current_scope
+    invoice = Invoicing.get_invoice!(scope, invoice_id)
+    :ok = Invoicing.attach(scope, invoice, socket.assigns.transaction)
 
     {:noreply,
      socket
@@ -268,11 +282,11 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   def handle_event("attach_elorus", %{"id" => id}, socket) do
     with true <- elorus_ready?(socket),
          %Elorus.Invoice{} = invoice <- socket.assigns.elorus_by_id[id] do
-      transaction = socket.assigns.transaction
+      %{transaction: transaction, current_scope: scope} = socket.assigns
 
       {:noreply,
        start_elorus_task(socket, :import, fn ->
-         Invoicing.import_elorus_invoice(invoice, transaction)
+         Invoicing.import_elorus_invoice(scope, invoice, transaction)
        end)}
     else
       _ -> {:noreply, socket}
@@ -363,7 +377,8 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   defp finish_elorus(socket, %{action: :search}, {:ok, invoices}) do
-    stored = invoices |> Enum.map(& &1.id) |> Invoicing.imported_elorus_ids()
+    stored =
+      Invoicing.imported_elorus_ids(socket.assigns.current_scope, Enum.map(invoices, & &1.id))
 
     socket
     |> assign(:elorus_loaded?, true)
@@ -494,7 +509,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} active={:reconciliation}>
+    <Layouts.app flash={@flash} current_scope={@current_scope} active={:reconciliation}>
       <.header>
         Reconciliation
         <:subtitle>Match every payment of the month to its invoice.</:subtitle>

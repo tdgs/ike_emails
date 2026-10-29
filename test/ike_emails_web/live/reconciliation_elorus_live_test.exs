@@ -18,6 +18,8 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
 
   setup {Req.Test, :set_req_test_to_shared}
 
+  setup :register_and_log_in_user
+
   setup do
     elorus = Application.fetch_env!(:ike_emails, Elorus)
     business = Application.fetch_env!(:ike_emails, :business)
@@ -28,7 +30,8 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
     end)
   end
 
-  defp income(attrs \\ %{}), do: transaction_fixture(Map.merge(%{"amount" => "100.00"}, attrs))
+  defp income(scope, attrs \\ %{}),
+    do: transaction_fixture(scope, Map.merge(%{"amount" => "100.00"}, attrs))
 
   defp panel(transaction, month \\ "2026-10"),
     do: ~p"/transactions/#{transaction.id}/invoice?month=#{month}"
@@ -59,9 +62,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
   end
 
   describe "the section" do
-    test "is there for money in, with a button, and asks nothing yet", %{conn: conn} do
+    test "is there for money in, with a button, and asks nothing yet", %{conn: conn, scope: scope} do
       stub()
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
 
       assert has_element?(view, "#elorus-section")
       assert has_element?(view, "#search-elorus", "October 2026")
@@ -69,19 +72,19 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       refute_receive {:elorus_request, _}, 200
     end
 
-    test "is not there for money out", %{conn: conn} do
-      {:ok, view, _html} = live(conn, panel(transaction_fixture(%{"amount" => "-100.00"})))
+    test "is not there for money out", %{conn: conn, scope: scope} do
+      {:ok, view, _html} = live(conn, panel(transaction_fixture(scope, %{"amount" => "-100.00"})))
 
       assert has_element?(view, "#attach-panel")
       refute has_element?(view, "#elorus-section")
     end
 
-    test "tells how to set Elorus up when it is not", %{conn: conn} do
+    test "tells how to set Elorus up when it is not", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json()])
       config = Application.fetch_env!(:ike_emails, Elorus)
       Application.put_env(:ike_emails, Elorus, Keyword.put(config, :api_token, nil))
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
 
       assert has_element?(view, "#elorus-unconfigured")
       refute has_element?(view, "#search-elorus")
@@ -95,7 +98,10 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
   end
 
   describe "searching" do
-    test "lists the invoices of the month, the ones for the amount first", %{conn: conn} do
+    test "lists the invoices of the month, the ones for the amount first", %{
+      conn: conn,
+      scope: scope
+    } do
       stub(
         invoices: [
           invoice_json(%{"id" => "a", "total" => "30.00", "payable" => "30.00"}),
@@ -105,7 +111,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
         ]
       )
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
       wait_for(view, "#elorus-invoices")
 
@@ -119,9 +125,12 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert has_element?(view, "#attach-elorus-a")
     end
 
-    test "asks for the month that is shown, not the one of the transaction", %{conn: conn} do
+    test "asks for the month that is shown, not the one of the transaction", %{
+      conn: conn,
+      scope: scope
+    } do
       stub()
-      transaction = income(%{"date" => "2026-09-14"})
+      transaction = income(scope, %{"date" => "2026-09-14"})
 
       {:ok, view, _html} = live(conn, panel(transaction, "2026-08"))
       assert has_element?(view, "#search-elorus", "August 2026")
@@ -131,26 +140,27 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert %{"period_from" => "2026-08-01", "period_to" => "2026-08-31"} = last_query()
     end
 
-    test "says so when the month has no invoices", %{conn: conn} do
+    test "says so when the month has no invoices", %{conn: conn, scope: scope} do
       stub(invoices: [])
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
 
       wait_for(view, "#elorus-empty")
       assert has_element?(view, "#elorus-empty", "October 2026")
     end
 
-    test "marks the invoices that were imported", %{conn: conn} do
+    test "marks the invoices that were imported", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"}), invoice_json(%{"id" => "b"})])
 
       {:ok, _} =
         Invoicing.import_elorus_invoice(
+          scope,
           Elorus.Invoice.from_api(invoice_json(%{"id" => "b"})),
-          income()
+          income(scope)
         )
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
       wait_for(view, elorus_row("a"))
 
@@ -164,10 +174,10 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
           {429, "limiting requests"},
           {500, "unexpected status (500)"}
         ] do
-      test "shows the failure when Elorus answers #{status}", %{conn: conn} do
+      test "shows the failure when Elorus answers #{status}", %{conn: conn, scope: scope} do
         stub(status: unquote(status))
 
-        {:ok, view, _html} = live(conn, panel(income()))
+        {:ok, view, _html} = live(conn, panel(income(scope)))
         search(view)
 
         wait_for(view, "#elorus-error")
@@ -177,9 +187,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       end
     end
 
-    test "can be tried again after a failure", %{conn: conn} do
+    test "can be tried again after a failure", %{conn: conn, scope: scope} do
       stub(status: 500)
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
       wait_for(view, "#elorus-error")
 
@@ -190,10 +200,10 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       refute has_element?(view, "#elorus-error")
     end
 
-    test "shows a crashed task as a failure", %{conn: conn} do
+    test "shows a crashed task as a failure", %{conn: conn, scope: scope} do
       Req.Test.stub(Elorus, fn _conn -> raise "boom" end)
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
 
       wait_for(view, "#elorus-error")
@@ -201,31 +211,34 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert has_element?(view, "#search-elorus:not([disabled])")
     end
 
-    test "shows a failed connection as such", %{conn: conn} do
+    test "shows a failed connection as such", %{conn: conn, scope: scope} do
       Req.Test.stub(Elorus, fn conn -> Req.Test.transport_error(conn, :econnrefused) end)
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
 
       wait_for(view, "#elorus-error")
       assert has_element?(view, "#elorus-error", "Could not reach Elorus")
     end
 
-    test "tells how long to wait when Elorus limits the requests", %{conn: conn} do
+    test "tells how long to wait when Elorus limits the requests", %{conn: conn, scope: scope} do
       Req.Test.stub(Elorus, fn conn ->
         conn
         |> Plug.Conn.put_resp_header("retry-after", "42")
         |> Plug.Conn.send_resp(429, "")
       end)
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
 
       wait_for(view, "#elorus-error")
       assert has_element?(view, "#elorus-error", "Try again in 42 seconds")
     end
 
-    test "runs one task at a time, and forgets the one of a closed panel", %{conn: conn} do
+    test "runs one task at a time, and forgets the one of a closed panel", %{
+      conn: conn,
+      scope: scope
+    } do
       test = self()
 
       Req.Test.stub(Elorus, fn conn ->
@@ -245,7 +258,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
         })
       end)
 
-      transaction = income()
+      transaction = income(scope)
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
       assert_receive {:blocked, task}, 1_000
@@ -269,9 +282,12 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
   end
 
   describe "attaching" do
-    test "stores the invoice with its PDF, attaches it and closes the panel", %{conn: conn} do
+    test "stores the invoice with its PDF, attaches it and closes the panel", %{
+      conn: conn,
+      scope: scope
+    } do
       stub(invoices: [invoice_json(%{"id" => "a", "total" => "100.00"})])
-      transaction = income()
+      transaction = income(scope)
 
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
@@ -285,21 +301,22 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       refute has_element?(view, "#attach-panel")
 
       assert [%Invoice{elorus_id: "a", amount_cents: 10_000, receiver_name: "Acme Inc."}] =
-               Banking.get_transaction!(transaction.id).invoices
+               Banking.get_transaction!(scope, transaction.id).invoices
     end
 
-    test "does not download again an invoice that was imported", %{conn: conn} do
+    test "does not download again an invoice that was imported", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"})])
 
       {:ok, _} =
         Invoicing.import_elorus_invoice(
+          scope,
           Elorus.Invoice.from_api(invoice_json(%{"id" => "a"})),
-          income()
+          income(scope)
         )
 
       request_paths()
 
-      transaction = income()
+      transaction = income(scope)
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
       wait_for(view, "#attach-elorus-a")
@@ -311,9 +328,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert Repo.aggregate(Invoice, :count) == 1
     end
 
-    test "shows why when the PDF cannot be downloaded", %{conn: conn} do
+    test "shows why when the PDF cannot be downloaded", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"})], pdf_status: 404)
-      transaction = income()
+      transaction = income(scope)
 
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
@@ -324,14 +341,14 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert has_element?(view, "#elorus-error", "does not have that invoice")
       assert has_element?(view, "#attach-panel")
       assert has_element?(view, elorus_row("a"))
-      assert Banking.get_transaction!(transaction.id).invoices == []
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
     end
 
-    test "says when the business has no name", %{conn: conn} do
+    test "says when the business has no name", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"})])
       Application.put_env(:ike_emails, :business, [])
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
       wait_for(view, "#attach-elorus-a")
       view |> element("#attach-elorus-a") |> render_click()
@@ -340,10 +357,10 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert has_element?(view, "#elorus-error", "BUSINESS_NAME")
     end
 
-    test "says what is wrong with an invoice that cannot be stored", %{conn: conn} do
+    test "says what is wrong with an invoice that cannot be stored", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a", "total" => "99999999999.00"})])
 
-      {:ok, view, _html} = live(conn, panel(income()))
+      {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
       wait_for(view, "#attach-elorus-a")
       view |> element("#attach-elorus-a") |> render_click()
@@ -352,9 +369,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert has_element?(view, "#elorus-error", "amount input is too large")
     end
 
-    test "ignores an id that was not listed", %{conn: conn} do
+    test "ignores an id that was not listed", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"})])
-      transaction = income()
+      transaction = income(scope)
 
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
@@ -366,12 +383,12 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
 
       refute_receive {:elorus_request, _}, 200
       refute has_element?(view, "#elorus-error")
-      assert Banking.get_transaction!(transaction.id).invoices == []
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
     end
 
-    test "is not possible for money out", %{conn: conn} do
+    test "is not possible for money out", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"})])
-      transaction = transaction_fixture(%{"amount" => "-100.00"})
+      transaction = transaction_fixture(scope, %{"amount" => "-100.00"})
 
       {:ok, view, _html} = live(conn, panel(transaction))
       render_hook(view, "search_elorus", %{})
@@ -425,9 +442,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 1_000
     end
 
-    test "shows that it runs, and keeps the buttons from being used", %{conn: conn} do
+    test "shows that it runs, and keeps the buttons from being used", %{conn: conn, scope: scope} do
       stub_slow_pdf()
-      transaction = income()
+      transaction = income(scope)
 
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
@@ -450,9 +467,12 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert has_element?(view, "#status-#{transaction.id}[data-status=invoiced]")
     end
 
-    test "goes on when the panel is closed, and brings the rows up to date", %{conn: conn} do
+    test "goes on when the panel is closed, and brings the rows up to date", %{
+      conn: conn,
+      scope: scope
+    } do
       stub_slow_pdf()
-      transaction = income()
+      transaction = income(scope)
 
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
@@ -478,9 +498,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       assert request_paths() == ["/v1.2/invoices/", "/v1.2/invoices/a/pdf/"]
     end
 
-    test "reports a failure with a message when the panel was closed", %{conn: conn} do
+    test "reports a failure with a message when the panel was closed", %{conn: conn, scope: scope} do
       stub_slow_pdf(404)
-      transaction = income()
+      transaction = income(scope)
 
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
@@ -499,9 +519,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
   end
 
   describe "the receiver" do
-    test "shows in the invoice that was attached", %{conn: conn} do
+    test "shows in the invoice that was attached", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"})])
-      transaction = income()
+      transaction = income(scope)
 
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
@@ -509,7 +529,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       view |> element("#attach-elorus-a") |> render_click()
       assert_patch(view, ~p"/?month=2026-10", 1_000)
 
-      assert [%Invoice{id: id}] = Banking.get_transaction!(transaction.id).invoices
+      assert [%Invoice{id: id}] = Banking.get_transaction!(scope, transaction.id).invoices
 
       assert has_element?(
                view,

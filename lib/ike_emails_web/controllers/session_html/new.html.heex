@@ -1,0 +1,31 @@
+<Layouts.app flash={@flash} current_scope={@current_scope}>
+  <div class="mx-auto max-w-sm space-y-6 pt-8">
+    <.header>
+      Log in
+      <:subtitle>Sign in to see your transactions and invoices.</:subtitle>
+    </.header>
+
+    <.form for={@form} id="login-form" action={~p"/login"} class="space-y-2">
+      <.input
+        field={@form[:email]}
+        id="login-email"
+        type="email"
+        label="Email"
+        autocomplete="username"
+        required
+        autofocus
+      />
+      <.input
+        field={@form[:password]}
+        id="login-password"
+        type="password"
+        label="Password"
+        autocomplete="current-password"
+        required
+      />
+      <.button id="login-submit" class="btn btn-primary w-full" phx-disable-with="Logging in...">
+        Log in <span aria-hidden="true">→</span>
+      </.button>
+    </.form>
+  </div>
+</Layouts.app>

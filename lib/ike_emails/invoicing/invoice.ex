@@ -30,6 +30,7 @@ defmodule IkeEmails.Invoicing.Invoice do
     # The id of the Elorus invoice this one was imported from
     field :elorus_id, :string
 
+    belongs_to :user, IkeEmails.Accounts.User
     many_to_many :transactions, Transaction, join_through: "invoice_transactions"
 
     timestamps(type: :utc_datetime)
@@ -81,7 +82,10 @@ defmodule IkeEmails.Invoicing.Invoice do
     invoice
     |> changeset(attrs)
     |> change(Map.take(file, [:file_key, :file_name, :file_size, :file_sha256]))
-    |> unique_constraint(:file_sha256, message: "has already been uploaded")
+    |> unique_constraint(:file_sha256,
+      name: :invoices_user_id_file_sha256_index,
+      message: "has already been uploaded"
+    )
   end
 
   @doc """
@@ -89,7 +93,9 @@ defmodule IkeEmails.Invoicing.Invoice do
   is typed in, so it has no place in `changeset/2`.
   """
   def put_elorus_id(changeset, elorus_id) do
-    changeset |> put_change(:elorus_id, elorus_id) |> unique_constraint(:elorus_id)
+    changeset
+    |> put_change(:elorus_id, elorus_id)
+    |> unique_constraint(:elorus_id, name: :invoices_user_id_elorus_id_index)
   end
 
   defp put_amount_cents(changeset) do

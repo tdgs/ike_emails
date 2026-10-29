@@ -8,6 +8,7 @@ defmodule IkeEmails.Invoicing do
 
   require Logger
 
+  alias IkeEmails.Accounts.Scope
   alias IkeEmails.Banking.Transaction
   alias IkeEmails.Elorus
   alias IkeEmails.Invoicing.Invoice
@@ -21,11 +22,12 @@ defmodule IkeEmails.Invoicing do
   def max_pdf_bytes, do: @max_pdf_bytes
 
   @doc """
-  Invoices, newest first, with their transactions. `:search` matches the issuer
-  or receiver name, or the invoice number.
+  The invoices of the user, newest first, with their transactions. `:search`
+  matches the issuer or receiver name, or the invoice number.
   """
-  def list_invoices(opts \\ []) do
+  def list_invoices(%Scope{} = scope, opts \\ []) do
     Invoice
+    |> where([i], i.user_id == ^Scope.user_id(scope))
     |> search(opts[:search])
     |> order_by([i], desc: i.date, desc: i.id)
     |> preload(:transactions)
@@ -51,8 +53,14 @@ defmodule IkeEmails.Invoicing do
 
   defp search(query, _term), do: query
 
-  def get_invoice!(id) do
-    Invoice |> Repo.get!(id) |> Repo.preload(:transactions)
+  @doc """
+  Gets an invoice of the user with its transactions. Raises when there is none,
+  which is also the case for the invoice of another user.
+  """
+  def get_invoice!(%Scope{} = scope, id) do
+    Invoice
+    |> Repo.get_by!(id: id, user_id: Scope.user_id(scope))
+    |> Repo.preload(:transactions)
   end
 
   @doc """
@@ -82,35 +90,37 @@ defmodule IkeEmails.Invoicing do
   end
 
   @doc """
-  Stores the PDF and the invoice, and links the invoice to the given
-  `:transaction_ids`, if any.
+  Stores the PDF and the invoice of the user, and links the invoice to the given
+  `:transaction_ids`, if any. They must be transactions of the user.
 
   Errors: a changeset, `:not_a_pdf`, `:too_large`, `{:duplicate, invoice}` when
   the same PDF was uploaded before, `:unknown_transaction` and
   `{:storage, reason}`.
   """
-  def create_invoice(attrs, pdf, file_name, opts \\ []) when is_binary(pdf) do
+  def create_invoice(%Scope{} = scope, attrs, pdf, file_name, opts \\ []) when is_binary(pdf) do
     transaction_ids = Keyword.get(opts, :transaction_ids, [])
-    file = file_facts(pdf, file_name)
+    file = file_facts(scope, pdf, file_name)
 
     changeset =
-      %Invoice{}
+      %Invoice{user_id: Scope.user_id(scope)}
       |> Invoice.create_changeset(attrs, file)
       |> put_elorus_id(opts[:elorus_id])
 
     with :ok <- check_pdf(pdf),
-         :ok <- check_new(file.file_sha256),
+         :ok <- check_new(scope, file.file_sha256),
          {:ok, changeset} <- apply_valid(changeset),
          :ok <- store(file, pdf) do
-      insert_invoice(changeset, transaction_ids, file)
+      insert_invoice(scope, changeset, transaction_ids, file)
     end
   end
 
-  defp file_facts(pdf, file_name) do
+  # The key has the user in it: the same PDF of two users is two objects, so that
+  # deleting the invoice of one does not take the PDF of the other
+  defp file_facts(scope, pdf, file_name) do
     sha256 = :crypto.hash(:sha256, pdf) |> Base.encode16(case: :lower)
 
     %{
-      file_key: "invoices/#{sha256}.pdf",
+      file_key: "invoices/#{Scope.user_id(scope)}/#{sha256}.pdf",
       file_name:
         file_name |> Path.basename() |> String.codepoints() |> Enum.take(255) |> Enum.join(),
       file_size: byte_size(pdf),
@@ -122,8 +132,8 @@ defmodule IkeEmails.Invoicing do
   defp check_pdf("%PDF-" <> _), do: :ok
   defp check_pdf(_), do: {:error, :not_a_pdf}
 
-  defp check_new(sha256) do
-    case Repo.get_by(Invoice, file_sha256: sha256) do
+  defp check_new(scope, sha256) do
+    case Repo.get_by(Invoice, user_id: Scope.user_id(scope), file_sha256: sha256) do
       nil -> :ok
       invoice -> {:error, {:duplicate, Repo.preload(invoice, :transactions)}}
     end
@@ -142,11 +152,11 @@ defmodule IkeEmails.Invoicing do
     end
   end
 
-  defp insert_invoice(changeset, transaction_ids, file) do
+  defp insert_invoice(scope, changeset, transaction_ids, file) do
     result =
       Repo.transact(fn ->
         with {:ok, invoice} <- Repo.insert(changeset),
-             :ok <- link(invoice.id, transaction_ids) do
+             :ok <- link(scope, invoice.id, transaction_ids) do
           {:ok, Repo.preload(invoice, :transactions)}
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -154,15 +164,18 @@ defmodule IkeEmails.Invoicing do
       end)
 
     with {:error, _reason} <- result do
-      remove_orphan(file)
+      remove_orphan(scope, file)
       result
     end
   end
 
-  # The key is the hash of the PDF: it is only an orphan if no invoice has it,
-  # an invoice stored in the meantime owns it.
-  defp remove_orphan(file) do
-    unless Repo.exists?(from i in Invoice, where: i.file_sha256 == ^file.file_sha256) do
+  # The key is the user and the hash of the PDF: it is only an orphan if no
+  # invoice has it, an invoice stored in the meantime owns it.
+  defp remove_orphan(scope, file) do
+    unless Repo.exists?(
+             from i in Invoice,
+               where: i.user_id == ^Scope.user_id(scope) and i.file_sha256 == ^file.file_sha256
+           ) do
       delete_object(file.file_key)
     end
   end
@@ -177,19 +190,20 @@ defmodule IkeEmails.Invoicing do
     end
   end
 
-  # Matches an invoice to transactions. A transaction that has an invoice is no
-  # longer one that needs none.
-  defp link(_invoice_id, []), do: :ok
+  # Matches an invoice to transactions of the same user. A transaction that has an
+  # invoice is no longer one that needs none.
+  defp link(_scope, _invoice_id, []), do: :ok
 
-  defp link(invoice_id, transaction_ids) do
+  defp link(scope, invoice_id, transaction_ids) do
     transaction_ids = Enum.uniq(transaction_ids)
-    known = Repo.aggregate(from(t in Transaction, where: t.id in ^transaction_ids), :count)
+    transactions = from(t in Transaction, where: t.user_id == ^Scope.user_id(scope))
+    known = Repo.aggregate(where(transactions, [t], t.id in ^transaction_ids), :count)
 
     if known == length(transaction_ids) do
       rows = Enum.map(transaction_ids, &%{invoice_id: invoice_id, transaction_id: &1})
       Repo.insert_all("invoice_transactions", rows, on_conflict: :nothing)
 
-      Repo.update_all(from(t in Transaction, where: t.id in ^transaction_ids),
+      Repo.update_all(where(transactions, [t], t.id in ^transaction_ids),
         set: [no_invoice: false, no_invoice_note: nil]
       )
 
@@ -202,15 +216,19 @@ defmodule IkeEmails.Invoicing do
   @doc """
   Updates what is typed in. The PDF stays.
   """
-  def update_invoice(%Invoice{} = invoice, attrs) do
-    invoice |> Invoice.with_amount_input() |> Invoice.changeset(attrs) |> Repo.update()
+  def update_invoice(%Scope{} = scope, %Invoice{} = invoice, attrs) do
+    scope
+    |> Scope.authorize!(invoice)
+    |> Invoice.with_amount_input()
+    |> Invoice.changeset(attrs)
+    |> Repo.update()
   end
 
   @doc """
   Deletes the invoice and its PDF. The transactions stay.
   """
-  def delete_invoice(%Invoice{} = invoice) do
-    with {:ok, invoice} <- Repo.delete(invoice) do
+  def delete_invoice(%Scope{} = scope, %Invoice{} = invoice) do
+    with {:ok, invoice} <- scope |> Scope.authorize!(invoice) |> Repo.delete() do
       delete_object(invoice.file_key)
       {:ok, invoice}
     end
@@ -219,9 +237,14 @@ defmodule IkeEmails.Invoicing do
   @doc """
   Matches the invoice to the transaction. Matching twice is fine.
   """
-  def attach(%Invoice{id: invoice_id}, %Transaction{id: transaction_id}) do
+  def attach(%Scope{} = scope, %Invoice{id: invoice_id} = invoice, %Transaction{} = transaction) do
+    Scope.authorize!(scope, invoice)
+    Scope.authorize!(scope, transaction)
+
     result =
-      Repo.transact(fn -> with :ok <- link(invoice_id, [transaction_id]), do: {:ok, :ok} end)
+      Repo.transact(fn ->
+        with :ok <- link(scope, invoice_id, [transaction.id]), do: {:ok, :ok}
+      end)
 
     with {:ok, :ok} <- result, do: :ok
   end
@@ -229,22 +252,26 @@ defmodule IkeEmails.Invoicing do
   @doc """
   Takes the invoice off the transaction.
   """
-  def detach(%Invoice{id: invoice_id}, %Transaction{id: transaction_id}) do
+  def detach(%Scope{} = scope, %Invoice{id: invoice_id} = invoice, %Transaction{} = transaction) do
+    Scope.authorize!(scope, invoice)
+    Scope.authorize!(scope, transaction)
+
     Repo.delete_all(
       from "invoice_transactions",
-        where: [invoice_id: ^invoice_id, transaction_id: ^transaction_id]
+        where: [invoice_id: ^invoice_id, transaction_id: ^transaction.id]
     )
 
     :ok
   end
 
   @doc """
-  The invoices that could belong to the transaction, best first: the ones of
-  exactly the amount, then the ones not matched to anything, then the closest
-  in date. Invoices already on the transaction are left out. `search` narrows
-  them by issuer name or number.
+  The invoices of the user that could belong to the transaction, best first: the
+  ones of exactly the amount, then the ones not matched to anything, then the
+  closest in date. Invoices already on the transaction are left out. `search`
+  narrows them by issuer name or number.
   """
-  def suggest_invoices(%Transaction{} = transaction, search \\ nil) do
+  def suggest_invoices(%Scope{} = scope, %Transaction{} = transaction, search \\ nil) do
+    Scope.authorize!(scope, transaction)
     cents = transaction.amount |> Money.cents_from_decimal() |> abs()
 
     attached =
@@ -254,6 +281,7 @@ defmodule IkeEmails.Invoicing do
       )
 
     Invoice
+    |> where([i], i.user_id == ^Scope.user_id(scope))
     |> where([i], i.id not in subquery(attached))
     |> search(search)
     |> preload(:transactions)
@@ -314,12 +342,16 @@ defmodule IkeEmails.Invoicing do
   defp decimal_cents(_amount), do: nil
 
   @doc """
-  Which of the Elorus invoices (by id) were imported already.
+  Which of the Elorus invoices (by id) the user imported already.
   """
-  def imported_elorus_ids([]), do: MapSet.new()
+  def imported_elorus_ids(%Scope{}, []), do: MapSet.new()
 
-  def imported_elorus_ids(elorus_ids) do
-    Repo.all(from i in Invoice, where: i.elorus_id in ^elorus_ids, select: i.elorus_id)
+  def imported_elorus_ids(%Scope{} = scope, elorus_ids) do
+    Repo.all(
+      from i in Invoice,
+        where: i.user_id == ^Scope.user_id(scope) and i.elorus_id in ^elorus_ids,
+        select: i.elorus_id
+    )
     |> MapSet.new()
   end
 
@@ -333,55 +365,73 @@ defmodule IkeEmails.Invoicing do
   `:business` settings, the receiver the client of the Elorus invoice.
 
   Returns `{:ok, invoice}`, or `{:error, reason}`: `:business_not_configured`,
-  an `IkeEmails.Elorus` error, or any error of `create_invoice/4`.
+  an `IkeEmails.Elorus` error, or any error of `create_invoice/5`.
   """
-  def import_elorus_invoice(%Elorus.Invoice{} = elorus_invoice, %Transaction{} = transaction) do
-    case Repo.get_by(Invoice, elorus_id: elorus_invoice.id) do
-      %Invoice{} = invoice -> attach_stored(invoice, transaction)
-      nil -> download_and_create(elorus_invoice, transaction)
+  def import_elorus_invoice(
+        %Scope{} = scope,
+        %Elorus.Invoice{} = elorus_invoice,
+        %Transaction{} = transaction
+      ) do
+    Scope.authorize!(scope, transaction)
+
+    case Repo.get_by(Invoice, user_id: Scope.user_id(scope), elorus_id: elorus_invoice.id) do
+      %Invoice{} = invoice -> attach_stored(scope, invoice, transaction)
+      nil -> download_and_create(scope, elorus_invoice, transaction)
     end
   end
 
-  defp download_and_create(elorus_invoice, transaction) do
+  defp download_and_create(scope, elorus_invoice, transaction) do
     with {:ok, business} <- business(),
          {:ok, attrs} <- elorus_attrs(elorus_invoice, business),
          :ok <- check_attrs(attrs),
          {:ok, pdf} <- Elorus.invoice_pdf(elorus_invoice.id) do
-      attrs
-      |> create_invoice(pdf, elorus_file_name(elorus_invoice),
+      scope
+      |> create_invoice(attrs, pdf, elorus_file_name(elorus_invoice),
         transaction_ids: [transaction.id],
         elorus_id: elorus_invoice.id
       )
-      |> after_import(elorus_invoice, transaction)
+      |> after_import(scope, elorus_invoice, transaction)
     end
   end
 
   # The same PDF is stored already: that invoice is the one
-  defp after_import({:error, {:duplicate, invoice}}, elorus_invoice, transaction) do
-    invoice |> claim_elorus_id(elorus_invoice.id) |> attach_stored(transaction)
+  defp after_import({:error, {:duplicate, invoice}}, scope, elorus_invoice, transaction) do
+    invoice |> claim_elorus_id(elorus_invoice.id) |> then(&attach_stored(scope, &1, transaction))
   end
 
   # Stored by another import between the checks and the insert: one of the two
   # unique indexes refused this one, depending on which comes first
-  defp after_import({:error, %Ecto.Changeset{} = changeset} = error, elorus_invoice, transaction) do
-    case stored_in_the_meantime(changeset, elorus_invoice) do
+  defp after_import(
+         {:error, %Ecto.Changeset{} = changeset} = error,
+         scope,
+         elorus_invoice,
+         transaction
+       ) do
+    case stored_in_the_meantime(scope, changeset, elorus_invoice) do
       %Invoice{} = invoice ->
-        invoice |> claim_elorus_id(elorus_invoice.id) |> attach_stored(transaction)
+        invoice
+        |> claim_elorus_id(elorus_invoice.id)
+        |> then(&attach_stored(scope, &1, transaction))
 
       nil ->
         error
     end
   end
 
-  defp after_import(result, _elorus_invoice, _transaction), do: result
+  defp after_import(result, _scope, _elorus_invoice, _transaction), do: result
 
-  defp stored_in_the_meantime(changeset, elorus_invoice) do
+  defp stored_in_the_meantime(scope, changeset, elorus_invoice) do
+    user_id = Scope.user_id(scope)
+
     cond do
       Keyword.has_key?(changeset.errors, :elorus_id) ->
-        Repo.get_by(Invoice, elorus_id: elorus_invoice.id)
+        Repo.get_by(Invoice, user_id: user_id, elorus_id: elorus_invoice.id)
 
       Keyword.has_key?(changeset.errors, :file_sha256) ->
-        Repo.get_by(Invoice, file_sha256: Ecto.Changeset.get_field(changeset, :file_sha256))
+        Repo.get_by(Invoice,
+          user_id: user_id,
+          file_sha256: Ecto.Changeset.get_field(changeset, :file_sha256)
+        )
 
       true ->
         nil
@@ -402,8 +452,8 @@ defmodule IkeEmails.Invoicing do
 
   defp claim_elorus_id(invoice, _elorus_id), do: invoice
 
-  defp attach_stored(invoice, transaction) do
-    with :ok <- attach(invoice, transaction), do: {:ok, get_invoice!(invoice.id)}
+  defp attach_stored(scope, invoice, transaction) do
+    with :ok <- attach(scope, invoice, transaction), do: {:ok, get_invoice!(scope, invoice.id)}
   end
 
   defp business do
