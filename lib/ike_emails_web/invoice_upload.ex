@@ -10,12 +10,16 @@ defmodule IkeEmailsWeb.InvoiceUpload do
 
   @doc """
   Sets up the single `:pdf` upload of a LiveView.
+
+  The file is uploaded as soon as it is chosen, not when the form is submitted,
+  as reading it with AI happens before the submit.
   """
   def allow(socket) do
     allow_upload(socket, :pdf,
       accept: ~w(.pdf),
       max_entries: 1,
-      max_file_size: Invoicing.max_pdf_bytes()
+      max_file_size: Invoicing.max_pdf_bytes(),
+      auto_upload: true
     )
   end
 
