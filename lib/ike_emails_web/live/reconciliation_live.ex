@@ -264,6 +264,12 @@ defmodule IkeEmailsWeb.ReconciliationLive do
      |> push_patch(to: month_path(socket.assigns.month))}
   end
 
+  # The field sends what is pending when it loses focus, which can be after the
+  # panel was closed
+  def handle_event("search_suggestions", _params, %{assigns: %{transaction: nil}} = socket) do
+    {:noreply, socket}
+  end
+
   def handle_event("search_suggestions", %{"q" => term}, socket) do
     {:noreply, socket |> assign(:suggestion_search, term) |> load_suggestions()}
   end

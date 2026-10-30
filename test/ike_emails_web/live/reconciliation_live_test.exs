@@ -387,6 +387,17 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
       refute has_element?(view, "#suggestions-#{linode.id}")
     end
 
+    test "ignores a search that arrives after the panel was closed", %{conn: conn, scope: scope} do
+      transaction = transaction_fixture(scope)
+      {:ok, view, _html} = live(conn, ~p"/transactions/#{transaction.id}/invoice?month=2026-10")
+
+      render_patch(view, ~p"/?month=2026-10")
+      refute has_element?(view, "#suggestion-search")
+
+      assert render_hook(view, "search_suggestions", %{"q" => "git"})
+      assert Process.alive?(view.pid)
+    end
+
     test "matches the chosen invoice to the transaction", %{conn: conn, scope: scope} do
       transaction = transaction_fixture(scope)
       invoice = invoice_fixture(scope)
