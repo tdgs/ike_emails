@@ -32,6 +32,9 @@ ssh:
 
 builder:
   arch: amd64
+  # Build on the server itself. On an Apple Silicon Mac the amd64 build runs
+  # under emulation, where Erlang crashes on start.
+  remote: ssh://deploy@203.0.113.10
 
 deploy_timeout: 60
 
@@ -39,28 +42,32 @@ env:
   clear:
     PHX_HOST: app.example.com
     POOL_SIZE: "10"
-    # Set these two once the S3 provider for the invoice PDFs is chosen. Without
-    # an endpoint the app talks to AWS S3.
-    # AWS_REGION: eu-central-1
-    # AWS_ENDPOINT_URL_S3: https://s3.example.com
+    # The invoice PDFs are in a Cloudflare R2 bucket, which takes the region "auto"
+    S3_BUCKET: ike-email-pdfs
+    AWS_REGION: auto
+    # The bucket is in the EU jurisdiction. The endpoint has no bucket in it, the
+    # app adds that.
+    AWS_ENDPOINT_URL_S3: https://b3558df98013686d5554e48c46b5721e.eu.r2.cloudflarestorage.com
     #
     # Optional integrations, see config/runtime.exs. The secret ones also need
     # to be listed under secret below and defined in .kamal/secrets.
-    # ELORUS_ORGANIZATION_ID: "123"
-    # AI_MODEL: anthropic:claude-sonnet-5-5
-    # BUSINESS_NAME: Example IKE
-    # BUSINESS_VAT: "123456789"
+    AI_MODEL: anthropic:claude-sonnet-5-5
+    BUSINESS_NAME: Example Business IKE
+    BUSINESS_VAT: "EL000000000"
   secret:
     - SECRET_KEY_BASE
     - DATABASE_URL
     - BANK_API_TOKEN
-    - S3_BUCKET
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
-    # - ELORUS_API_TOKEN
-    # - ANTHROPIC_API_KEY
+    # The organization id is no secret, it is kept with the token
+    - ELORUS_ORGANIZATION_ID
+    - ELORUS_API_TOKEN
+    - ANTHROPIC_API_KEY
 
 accessories:
+  # Backed up nightly to R2 by a systemd timer on the server, which is not part
+  # of Kamal. See deploy/backup/setup.sh.
   db:
     image: postgres:17
     host: 203.0.113.10
