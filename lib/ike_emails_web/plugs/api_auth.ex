@@ -10,6 +10,7 @@ defmodule IkeEmailsWeb.Plugs.ApiAuth do
   alias IkeEmails.Accounts
   alias IkeEmails.Accounts.Scope
   alias IkeEmailsWeb.ApiToken
+  alias IkeEmailsWeb.UserAuth
 
   def init(opts), do: opts
 
@@ -17,7 +18,9 @@ defmodule IkeEmailsWeb.Plugs.ApiAuth do
     with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
          {:ok, user_id} <- ApiToken.verify(token),
          %Accounts.User{} = user <- Accounts.get_user(user_id) do
-      assign(conn, :current_scope, Scope.for_user(user))
+      scope = Scope.for_user(user)
+      UserAuth.put_sentry_user(scope)
+      assign(conn, :current_scope, scope)
     else
       _ -> unauthorized(conn)
     end

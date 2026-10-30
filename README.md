@@ -56,6 +56,12 @@ and `AWS_REGION` (and `AWS_ENDPOINT_URL_S3` for a server that is not AWS).
 The Elorus and `BUSINESS_NAME` settings are shared: every user works on the same Elorus
 organization.
 
+The errors are reported to [Sentry](https://sentry.io) when `SENTRY_DSN` is set (the DSN
+is in the settings of the project, use an EU project for the data to stay in the EU).
+Without it nothing is sent. What is reported is the exception, the request without its
+body and cookies, and the id of the user, never an email or an IP address. The release
+is the commit that Kamal deployed.
+
 ## Users
 
 There is no sign-up page: users are created from the command line, with a password of

@@ -7,6 +7,8 @@ defmodule IkeEmails.Application do
 
   @impl true
   def start(_type, _args) do
+    add_sentry_handler()
+
     children = [
       IkeEmailsWeb.Telemetry,
       IkeEmails.Repo,
@@ -24,6 +26,21 @@ defmodule IkeEmails.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: IkeEmails.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # Reports to Sentry what is logged as an error and the crashes of processes, such as
+  # a LiveView or a task. It does nothing without SENTRY_DSN.
+  #
+  # Bandit logs the exception of a request under its own domain, which the handler
+  # leaves out by default, so only Cowboy is left out: without this the errors of the
+  # requests are not reported at all.
+  defp add_sentry_handler do
+    :logger.add_handler(:sentry_handler, Sentry.LoggerHandler, %{
+      config: %{
+        capture_log_messages: true,
+        capture_excluded_domains: [:cowboy]
+      }
+    })
   end
 
   # Tell Phoenix to update the endpoint configuration

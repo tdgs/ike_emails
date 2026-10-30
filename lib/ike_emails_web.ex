@@ -52,6 +52,9 @@ defmodule IkeEmailsWeb do
     quote do
       use Phoenix.LiveView
 
+      # Tells Sentry what the LiveView was doing when it failed
+      on_mount Sentry.LiveViewHook
+
       unquote(html_helpers())
     end
   end

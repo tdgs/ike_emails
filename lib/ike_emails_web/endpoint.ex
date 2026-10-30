@@ -11,9 +11,11 @@ defmodule IkeEmailsWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  # :uri and :user_agent are for Sentry.LiveViewHook. Not :peer_data, that puts the
+  # IP address of the user in the reports.
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
-    longpoll: [connect_info: [session: @session_options]]
+    websocket: [connect_info: [:uri, :user_agent, session: @session_options]],
+    longpoll: [connect_info: [:uri, :user_agent, session: @session_options]]
 
   # Serve at "/" the static files from "priv/static" directory.
   #
@@ -49,6 +51,13 @@ defmodule IkeEmailsWeb.Endpoint do
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
+
+  # The request goes with the errors reported to Sentry, but not its body: what is
+  # pushed to the API (the bank transactions) must stay with us. The cookies and
+  # the authorization header are scrubbed by default. There is no
+  # Sentry.PlugCapture, it is for Cowboy and reports twice on Bandit, see
+  # IkeEmails.Application for how the errors are reported.
+  plug Sentry.PlugContext, body_scrubber: nil
 
   plug Plug.MethodOverride
   plug Plug.Head

@@ -59,6 +59,18 @@ if config_env() != :test and ai_model not in [nil, ""] do
   config :ike_emails, IkeEmails.InvoiceExtractor, model: ai_model
 end
 
+# Reporting the errors to Sentry is optional: without SENTRY_DSN it is off. The DSN
+# is found in the settings of the project in Sentry. The release is the commit
+# that Kamal deployed. The tests never report.
+sentry_dsn = System.get_env("SENTRY_DSN")
+
+if config_env() != :test and sentry_dsn not in [nil, ""] do
+  config :sentry,
+    dsn: sentry_dsn,
+    environment_name: config_env(),
+    release: System.get_env("KAMAL_VERSION")
+end
+
 # Who you are, as the issuer of the invoices imported from Elorus (Elorus does not
 # tell). The name is needed to import them, the VAT number is optional. The
 # tests have their own, see config/test.exs.
