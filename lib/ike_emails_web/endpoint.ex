@@ -35,6 +35,9 @@ defmodule IkeEmailsWeb.Endpoint do
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :ike_emails
   end
 
+  # Kamal's proxy asks this before it sends traffic to a new container
+  plug :health_check
+
   plug Phoenix.LiveDashboard.RequestLogger,
     param_key: "request_logger",
     cookie_key: "request_logger"
@@ -51,4 +54,10 @@ defmodule IkeEmailsWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
   plug IkeEmailsWeb.Router
+
+  defp health_check(%Plug.Conn{request_path: "/up"} = conn, _opts) do
+    conn |> Plug.Conn.send_resp(200, "ok") |> Plug.Conn.halt()
+  end
+
+  defp health_check(conn, _opts), do: conn
 end

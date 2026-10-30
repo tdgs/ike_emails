@@ -1,0 +1,77 @@
+# Deployed with Kamal (https://kamal-deploy.org) to a single VPS: the app and its
+# Postgres run there as containers. Secrets are not in this file, see
+# .kamal/secrets.
+service: ike-emails
+image: tdgs/ike-emails
+
+servers:
+  web:
+    hosts:
+      - 91.250.248.6
+    # Migrations run on every start. If one fails the container exits, the
+    # health check fails and Kamal keeps the previous version running.
+    cmd: sh -c "bin/migrate && exec bin/server"
+
+proxy:
+  ssl: true
+  host: app.ikeops.gr
+  app_port: 4000
+  healthcheck:
+    path: /up
+    interval: 3
+    timeout: 3
+
+registry:
+  server: ghcr.io
+  username: tdgs
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+ssh:
+  user: deploy
+
+builder:
+  arch: amd64
+
+deploy_timeout: 60
+
+env:
+  clear:
+    PHX_HOST: app.ikeops.gr
+    POOL_SIZE: "10"
+    # Set these two once the S3 provider for the invoice PDFs is chosen. Without
+    # an endpoint the app talks to AWS S3.
+    # AWS_REGION: eu-central-1
+    # AWS_ENDPOINT_URL_S3: https://s3.example.com
+    #
+    # Optional integrations, see config/runtime.exs. The secret ones also need
+    # to be listed under secret below and defined in .kamal/secrets.
+    # ELORUS_ORGANIZATION_ID: "123"
+    # AI_MODEL: anthropic:claude-sonnet-5-5
+    # BUSINESS_NAME: Example IKE
+    # BUSINESS_VAT: "123456789"
+  secret:
+    - SECRET_KEY_BASE
+    - DATABASE_URL
+    - BANK_API_TOKEN
+    - S3_BUCKET
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    # - ELORUS_API_TOKEN
+    # - ANTHROPIC_API_KEY
+
+accessories:
+  db:
+    image: postgres:17
+    host: 91.250.248.6
+    # Only reachable from the server itself, not from the internet. Docker
+    # publishes ports around ufw, so the 127.0.0.1 here is what keeps it closed.
+    port: "127.0.0.1:5432:5432"
+    env:
+      clear:
+        POSTGRES_USER: ike_emails
+        POSTGRES_DB: ike_emails_prod
+      secret:
+        - POSTGRES_PASSWORD
+    directories:
+      - data:/var/lib/postgresql/data
