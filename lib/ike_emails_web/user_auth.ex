@@ -56,8 +56,22 @@ defmodule IkeEmailsWeb.UserAuth do
   Puts the scope of the logged in user in `conn.assigns.current_scope`, or `nil`.
   """
   def fetch_current_scope_for_user(conn, _opts) do
-    assign(conn, :current_scope, scope_from_session(get_session(conn)))
+    scope = scope_from_session(get_session(conn))
+    put_sentry_user(scope)
+    assign(conn, :current_scope, scope)
   end
+
+  @doc """
+  Tells Sentry who the errors that follow happen to. It is the id of the user and
+  nothing else, no email.
+
+  The context lives as long as the process, and a connection that stays open serves
+  the requests that follow with the same one, so for no user the id is cleared.
+  """
+  def put_sentry_user(%Scope{} = scope),
+    do: Sentry.Context.set_user_context(%{id: Scope.user_id(scope)})
+
+  def put_sentry_user(nil), do: Sentry.Context.set_user_context(%{id: nil})
 
   defp scope_from_session(%{"user_id" => user_id}) do
     user_id |> Accounts.get_user() |> Scope.for_user()
@@ -107,6 +121,8 @@ defmodule IkeEmailsWeb.UserAuth do
   def on_mount(:require_authenticated, _params, session, socket) do
     socket =
       Phoenix.Component.assign_new(socket, :current_scope, fn -> scope_from_session(session) end)
+
+    put_sentry_user(socket.assigns.current_scope)
 
     if socket.assigns.current_scope do
       {:cont, socket}

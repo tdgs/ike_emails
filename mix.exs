@@ -63,6 +63,9 @@ defmodule IkeEmails.MixProject do
       {:req, "~> 0.5"},
       {:req_s3, "~> 0.2.5"},
       {:req_llm, "~> 1.29"},
+      # Error tracking, off unless SENTRY_DSN is set. It sends with Finch
+      {:sentry, "~> 14.0"},
+      {:finch, "~> 0.21"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.26"},

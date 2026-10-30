@@ -64,6 +64,8 @@ env:
     - ELORUS_ORGANIZATION_ID
     - ELORUS_API_TOKEN
     - ANTHROPIC_API_KEY
+    # Where the errors are reported to, off without it
+    - SENTRY_DSN
 
 accessories:
   # Backed up nightly to R2 by a systemd timer on the server, which is not part
