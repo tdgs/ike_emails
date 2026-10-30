@@ -55,3 +55,7 @@ config :phoenix, :plug_init_mode, :runtime
 # Enable helpful, but potentially expensive runtime checks
 config :phoenix_live_view,
   enable_expensive_runtime_checks: true
+
+# The spans of the calls to Elorus and the language model are sent to the test that
+# makes them, see test/support/span_collector.ex
+config :opentelemetry, processors: [{:otel_simple_processor, %{}}]

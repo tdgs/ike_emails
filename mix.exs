@@ -10,8 +10,18 @@ defmodule IkeEmails.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
+      releases: releases(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       listeners: [Phoenix.CodeReloader]
+    ]
+  end
+
+  # OpenTelemetry is temporary, so that a crash of it cannot take the node down
+  defp releases do
+    [
+      ike_emails: [
+        applications: [opentelemetry_exporter: :permanent, opentelemetry: :temporary]
+      ]
     ]
   end
 
@@ -66,6 +76,12 @@ defmodule IkeEmails.MixProject do
       # Error tracking, off unless SENTRY_DSN is set. It sends with Finch
       {:sentry, "~> 14.0"},
       {:finch, "~> 0.21"},
+      # Sentry turns the spans of OpenTelemetry into traces, and only compiles that
+      # when all four are there
+      {:opentelemetry, "~> 1.7"},
+      {:opentelemetry_api, "~> 1.5"},
+      {:opentelemetry_exporter, "~> 1.10"},
+      {:opentelemetry_semantic_conventions, "~> 1.27"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 0.26"},

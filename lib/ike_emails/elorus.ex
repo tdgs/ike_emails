@@ -36,6 +36,7 @@ defmodule IkeEmails.Elorus do
   require Logger
 
   alias IkeEmails.Elorus.Invoice
+  alias IkeEmails.Tracing
 
   @max_page_size 250
 
@@ -128,7 +129,15 @@ defmodule IkeEmails.Elorus do
     max_pages = Keyword.get(opts, :max_pages, 20)
     params = Keyword.put_new(params, :page_size, @max_page_size)
 
-    collect_pages(Keyword.delete(params, :page), 1, max_pages, [])
+    read_pages = fn -> collect_pages(Keyword.delete(params, :page), 1, max_pages, []) end
+
+    # The requests of the pages are the spans inside this one. Without a
+    # configuration there are no requests, and no span either
+    if configured?() do
+      Tracing.span("elorus list_all_invoices", %{}, read_pages)
+    else
+      read_pages.()
+    end
   end
 
   defp collect_pages(_params, page, max_pages, _acc) when page > max_pages do
@@ -179,14 +188,33 @@ defmodule IkeEmails.Elorus do
     config = config()
 
     if configured?(config) do
-      config
-      |> new_request()
-      |> Req.request([method: :get, url: url] ++ opts)
-      |> handle_response()
+      # One span for the call, with the retries in it. The path in it is `url`, the
+      # template, because the resolved one holds the id of an invoice
+      Tracing.span("elorus GET #{url}", request_attributes(config, url), :client, fn ->
+        result = config |> new_request() |> Req.request([method: :get, url: url] ++ opts)
+
+        Tracing.set_attributes(response_attributes(result))
+        handle_response(result)
+      end)
     else
       {:error, :not_configured}
     end
   end
+
+  # What is sent in a span, and nothing else: see IkeEmails.Tracing
+  defp request_attributes(config, url) do
+    %{
+      "http.request.method" => "GET",
+      "url.path" => url,
+      "server.address" => config[:base_url] && URI.parse(config[:base_url]).host
+    }
+  end
+
+  defp response_attributes({:ok, %Req.Response{status: status}}),
+    do: %{"http.response.status_code" => status}
+
+  defp response_attributes({:error, %module{}}), do: %{"error.type" => inspect(module)}
+  defp response_attributes({:error, _other}), do: %{"error.type" => "unknown"}
 
   defp new_request(config) do
     headers =

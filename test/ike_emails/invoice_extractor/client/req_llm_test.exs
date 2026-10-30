@@ -3,6 +3,7 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLMTest do
   use ExUnit.Case, async: false
 
   import IkeEmails.Fixtures, only: [pdf_fixture: 0]
+  import IkeEmails.SpanCollector
 
   alias IkeEmails.InvoiceExtractor
   alias IkeEmails.InvoiceExtractor.Client.ReqLLM, as: Client
@@ -128,5 +129,96 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLMTest do
              Client.generate(pdf_fixture(), "Read it.", @fields, "anthropic:claude-sonnet-5-5")
 
     assert reason == :invalid_response
+  end
+
+  describe "the span" do
+    setup :collect_spans
+
+    @model "anthropic:claude-sonnet-5-5"
+
+    test "is the operation, with the model and what it used" do
+      pdf = pdf_fixture()
+      answer(200, message(@found))
+
+      assert {:ok, _found} = Client.generate(pdf, "Read it.", @fields, @model)
+
+      assert [span] = await_spans(1)
+      # Sentry takes the type of the span from its name
+      assert span.name == "gen_ai.chat"
+      assert span.kind == :client
+
+      assert span.attributes == %{
+               "gen_ai.operation.name" => "chat",
+               "gen_ai.provider.name" => "anthropic",
+               "gen_ai.request.model" => "claude-sonnet-5-5",
+               "gen_ai.request.max_tokens" => 1024,
+               "gen_ai.response.model" => "claude-sonnet-5-5",
+               "gen_ai.response.finish_reasons" => ["stop"],
+               "gen_ai.usage.input_tokens" => 10,
+               "gen_ai.usage.output_tokens" => 10,
+               "gen_ai.usage.total_tokens" => 20,
+               "ike_emails.pdf_bytes" => byte_size(pdf)
+             }
+    end
+
+    for {name, setup, reason} <- [
+          {"a rejected key", {401, %{"type" => "error", "error" => %{"message" => "no"}}},
+           "unauthorized"},
+          {"a rate limit", {429, %{"type" => "error", "error" => %{"message" => "slow"}}},
+           "rate_limited"}
+        ] do
+      test "has the kind of the error, and the model that was asked for, for #{name}" do
+        {status, body} = unquote(Macro.escape(setup))
+        answer(status, body)
+
+        assert {:error, _reason} = Client.generate(pdf_fixture(), "Read it.", @fields, @model)
+
+        assert [span] = await_spans(1)
+        assert span.attributes["error.type"] == unquote(reason)
+        # Without a model of the answer, Sentry would not show the call
+        assert span.attributes["gen_ai.response.model"] == "claude-sonnet-5-5"
+        refute Map.has_key?(span.attributes, "gen_ai.usage.input_tokens")
+      end
+    end
+
+    test "has the kind of the error when there is no key, which ReqLLM raises" do
+      System.delete_env("ANTHROPIC_API_KEY")
+
+      assert {:error, :missing_key} = Client.generate(pdf_fixture(), "Read it.", @fields, @model)
+
+      assert [span] = await_spans(1)
+      assert span.attributes["error.type"] == "missing_key"
+      assert span.attributes["gen_ai.response.model"] == "claude-sonnet-5-5"
+    end
+
+    test "has the kind of an answer that is not the object, and the tokens it used" do
+      answer(200, message("I cannot read this."))
+
+      assert {:error, :invalid_response} =
+               Client.generate(pdf_fixture(), "Read it.", @fields, @model)
+
+      assert [span] = await_spans(1)
+      assert span.attributes["error.type"] == "invalid_response"
+      assert span.attributes["gen_ai.usage.total_tokens"] == 20
+    end
+
+    test "carries neither the PDF, the prompt, what was read, nor the key" do
+      pdf = pdf_fixture()
+      answer(200, message(@found))
+
+      assert {:ok, _found} =
+               Client.generate(pdf, "Read the invoice of Acme Ltd.", @fields, @model)
+
+      assert [span] = await_spans(1)
+      everything = everything([span])
+
+      refute everything =~ Base.encode64(pdf)
+      refute everything =~ "Acme"
+      refute everything =~ "12.50"
+      refute everything =~ "test-anthropic-key"
+      refute Map.has_key?(span.attributes, "gen_ai.input.messages")
+      refute Map.has_key?(span.attributes, "gen_ai.output.messages")
+      refute Map.has_key?(span.attributes, "gen_ai.system_instructions")
+    end
   end
 end

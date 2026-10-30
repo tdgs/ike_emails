@@ -62,13 +62,22 @@ end
 # Reporting the errors to Sentry is optional: without SENTRY_DSN it is off. The DSN
 # is found in the settings of the project in Sentry. The release is the commit
 # that Kamal deployed. The tests never report.
+#
+# Every call to Elorus and to the language model is traced, so all the traces are
+# kept. Only those two make spans, see IkeEmails.Tracing. The spans are made with
+# OpenTelemetry, and Sentry's processor and sampler turn them into traces.
 sentry_dsn = System.get_env("SENTRY_DSN")
 
 if config_env() != :test and sentry_dsn not in [nil, ""] do
   config :sentry,
     dsn: sentry_dsn,
     environment_name: config_env(),
-    release: System.get_env("KAMAL_VERSION")
+    release: System.get_env("KAMAL_VERSION"),
+    traces_sample_rate: 1.0
+
+  config :opentelemetry,
+    span_processor: {Sentry.OpenTelemetry.SpanProcessor, []},
+    sampler: {Sentry.OpenTelemetry.Sampler, []}
 end
 
 # Who you are, as the issuer of the invoices imported from Elorus (Elorus does not

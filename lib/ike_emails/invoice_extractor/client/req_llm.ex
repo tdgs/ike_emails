@@ -10,6 +10,8 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLM do
 
   require Logger
 
+  alias IkeEmails.Tracing
+
   @max_tokens 1024
   @receive_timeout 60_000
 
@@ -28,17 +30,96 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLM do
       req_http_options: http_options()
     ]
 
-    with {:ok, response} <- ReqLLM.generate_object(model, messages, schema(fields), options),
-         %{} = object <- ReqLLM.Response.object(response) do
-      {:ok, object}
-    else
-      nil -> {:error, :invalid_response}
-      {:error, error} -> {:error, reason(error)}
-    end
-  rescue
-    # ReqLLM raises, instead of returning an error, when it finds no API key
-    error in ReqLLM.Error.Invalid.Parameter -> {:error, reason(error)}
+    # The span is named for the operation, which Sentry takes as the type of the
+    # span, and shows in its view of the language models. The model is in the
+    # attributes. What is sent in them is only what is safe, see IkeEmails.Tracing:
+    # not the prompt, the PDF or what is read from it
+    Tracing.span("gen_ai.chat", request_attributes(model, pdf), :client, fn ->
+      result = generate_object(model, messages, schema(fields), options)
+      reply = reply(result)
+
+      Tracing.set_attributes(response_attributes(result, reply, model))
+      reply
+    end)
   end
+
+  # ReqLLM raises, instead of returning an error, when it finds no API key
+  defp generate_object(model, messages, schema, options) do
+    ReqLLM.generate_object(model, messages, schema, options)
+  rescue
+    error in ReqLLM.Error.Invalid.Parameter -> {:error, error}
+  end
+
+  defp reply({:ok, response}) do
+    case ReqLLM.Response.object(response) do
+      %{} = object -> {:ok, object}
+      nil -> {:error, :invalid_response}
+    end
+  end
+
+  defp reply({:error, error}), do: {:error, reason(error)}
+
+  defp request_attributes(model, pdf) do
+    {provider, name} = split_model(model)
+
+    %{
+      "gen_ai.operation.name" => "chat",
+      "gen_ai.provider.name" => provider,
+      "gen_ai.request.model" => name,
+      "gen_ai.request.max_tokens" => @max_tokens,
+      "ike_emails.pdf_bytes" => byte_size(pdf)
+    }
+  end
+
+  # Sentry shows a call only with the model that answered. A call that failed has
+  # none, so it has the one that was asked for
+  defp response_attributes(result, reply, model) do
+    {_provider, name} = split_model(model)
+
+    Map.merge(
+      %{
+        "gen_ai.response.model" => response_model(result) || name,
+        "error.type" => error_type(reply)
+      },
+      usage_attributes(result)
+    )
+  end
+
+  defp response_model({:ok, %ReqLLM.Response{model: model}}) when is_binary(model), do: model
+  defp response_model(_result), do: nil
+
+  defp usage_attributes({:ok, %ReqLLM.Response{} = response}) do
+    usage = ReqLLM.Response.usage(response) || %{}
+
+    %{
+      "gen_ai.response.finish_reasons" => finish_reasons(ReqLLM.Response.finish_reason(response)),
+      "gen_ai.usage.input_tokens" => count(usage[:input_tokens]),
+      "gen_ai.usage.output_tokens" => count(usage[:output_tokens]),
+      "gen_ai.usage.total_tokens" => count(usage[:total_tokens])
+    }
+  end
+
+  defp usage_attributes(_result), do: %{}
+
+  defp finish_reasons(nil), do: nil
+  defp finish_reasons(reason), do: [to_string(reason)]
+
+  defp count(value) when is_number(value), do: value
+  defp count(_value), do: nil
+
+  # "anthropic:claude-sonnet-5-5" is the provider and the model
+  defp split_model(model) do
+    case String.split(model, ":", parts: 2) do
+      [provider, name] -> {provider, name}
+      [name] -> {nil, name}
+    end
+  end
+
+  # The kind of the error and nothing of its message, which can carry what the
+  # provider answered
+  defp error_type({:ok, _object}), do: nil
+  defp error_type({:error, {:failed, _message}}), do: "failed"
+  defp error_type({:error, reason}), do: to_string(reason)
 
   defp schema(fields) do
     fields
