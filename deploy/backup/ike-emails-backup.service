@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up the ike_emails database to Cloudflare R2
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+EnvironmentFile=/home/deploy/.config/ike-emails-backup.env
+ExecStart=/home/deploy/ike-emails-backup/backup.sh
