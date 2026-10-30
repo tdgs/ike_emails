@@ -29,6 +29,11 @@ config :ike_emails, IkeEmails.Storage.S3,
   bucket: "ike-emails-invoices",
   region: "us-east-1"
 
+# The spans of the calls to Elorus and the language model go to Sentry, see
+# config/runtime.exs. Without SENTRY_DSN they go nowhere, and OpenTelemetry does
+# not look for a collector on localhost.
+config :opentelemetry, traces_exporter: :none
+
 # The Elorus API, where the invoices for income are issued. The credentials come
 # from the environment, see config/runtime.exs
 config :ike_emails, IkeEmails.Elorus, base_url: "https://api.elorus.com"

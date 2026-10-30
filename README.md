@@ -62,6 +62,13 @@ Without it nothing is sent. What is reported is the exception, the request witho
 body and cookies, and the id of the user, never an email or an IP address. The release
 is the commit that Kamal deployed.
 
+Every call to Elorus and to the language model is also traced (`IkeEmails.Tracing`).
+A trace of Elorus holds the method, the template of the path (never an invoice id), the
+status and the time. A trace of the model (`gen_ai.chat`, shown by Sentry under
+Explore, Agents) holds the provider, the model, the tokens, why it stopped and the size
+of the PDF. Neither holds a header, a body, the prompt, the PDF or what was read from
+it. Sentry does not scrub traces, so a new attribute has to be safe to send.
+
 ## Users
 
 There is no sign-up page: users are created from the command line, with a password of
