@@ -6,7 +6,10 @@ import Config
 # which you should run after static files are built and
 # before starting your production server.
 config :ike_emails, IkeEmailsWeb.Endpoint,
-  cache_static_manifest: "priv/static/cache_manifest.json"
+  cache_static_manifest: "priv/static/cache_manifest.json",
+  # The proxy in front (Kamal's) ends TLS and says so in x-forwarded-proto. Its
+  # health check reaches the app over plain HTTP, so /up is not redirected.
+  force_ssl: [rewrite_on: [:x_forwarded_proto], exclude: [paths: ["/up"]]]
 
 # Configures Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
