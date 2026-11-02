@@ -12,6 +12,7 @@ defmodule IkeEmailsWeb.UserAuth do
 
   alias IkeEmails.Accounts
   alias IkeEmails.Accounts.Scope
+  alias IkeEmails.Elorus.Connection
 
   @doc """
   Logs the user in: a new session, so that one from before the login (or
@@ -28,11 +29,16 @@ defmodule IkeEmailsWeb.UserAuth do
   end
 
   @doc """
-  Logs the user out, and closes the LiveViews they have open.
+  Logs the user out, and closes the LiveViews they have open. Their Elorus API key,
+  if they unlocked it, is locked again.
   """
   def log_out_user(conn) do
     if live_socket_id = get_session(conn, :live_socket_id) do
       IkeEmailsWeb.Endpoint.broadcast(live_socket_id, "disconnect", %{})
+    end
+
+    if scope = conn.assigns[:current_scope] do
+      Connection.lock(scope)
     end
 
     conn

@@ -47,6 +47,8 @@ defmodule IkeEmailsWeb.Router do
       live "/invoices/:id/edit", InvoiceLive.Index, :edit
 
       live "/statements", StatementLive.Index, :index
+
+      live "/settings", SettingsLive.Index, :index
     end
 
     get "/invoices/:id/pdf", InvoicePdfController, :show

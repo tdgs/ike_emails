@@ -1,14 +1,17 @@
 defmodule IkeEmails.Fixtures do
   @moduledoc """
-  Builds users, transactions, invoices and statements for the tests. The
-  transactions, invoices and statements are made for the user of a scope, see
-  `user_scope_fixture/1`.
+  Builds users, transactions, invoices, statements and settings for the tests. The
+  transactions, invoices, statements and settings are made for the user of a scope,
+  see `user_scope_fixture/1`.
   """
 
   alias IkeEmails.Accounts
   alias IkeEmails.Accounts.Scope
   alias IkeEmails.Banking
+  alias IkeEmails.Elorus.Connection
+  alias IkeEmails.Elorus.Credentials
   alias IkeEmails.Invoicing
+  alias IkeEmails.Settings
   alias IkeEmails.Statements
 
   @doc """
@@ -83,6 +86,80 @@ defmodule IkeEmails.Fixtures do
       Statements.put_statement(scope, month, pdf_fixture(), "statement.pdf")
 
     statement
+  end
+
+  @doc """
+  Saves the settings of the user: the business `"Test Business"` with the VAT
+  number `"EL099999999"`, and the Elorus organization `"1000000243015421"`, with
+  the API key `"test-elorus-token"` sealed with the password of the user. The
+  `attrs` are those of `IkeEmails.Settings.update_settings/2`.
+
+  Options: `:token`, to seal another API key, or none with `nil`, and `:password`,
+  of a user that was not made with `valid_user_password/0`.
+
+  Returns the settings as `IkeEmails.Settings.get_settings/1` does.
+  """
+  def settings_fixture(%Scope{} = scope, attrs \\ %{}, opts \\ []) do
+    attrs =
+      Map.merge(
+        %{
+          "business_name" => "Test Business",
+          "business_vat" => "EL099999999",
+          "elorus_organization_id" => "1000000243015421",
+          "elorus_demo" => "false"
+        },
+        stringify(attrs)
+      )
+
+    {:ok, _settings} = Settings.update_settings(scope, attrs)
+
+    if token = Keyword.get(opts, :token, "test-elorus-token") do
+      password = Keyword.get(opts, :password, valid_user_password())
+      {:ok, _settings} = Settings.set_elorus_token(scope, token, password)
+    end
+
+    Settings.get_settings(scope)
+  end
+
+  @doc """
+  The credentials `settings_fixture/3` saves, as they are when they are opened.
+  """
+  def elorus_credentials_fixture(attrs \\ []) do
+    struct!(
+      %Credentials{
+        api_token: "test-elorus-token",
+        organization_id: "1000000243015421",
+        demo: false
+      },
+      attrs
+    )
+  end
+
+  @doc """
+  Saves the settings of the user of the `scope` in the context (`settings_fixture/1`)
+  and unlocks their Elorus credentials, so that the calls to Elorus work. Use it as
+  `setup :configure_settings`, after the setup that makes the scope. The `settings`
+  are in the context, and the credentials are locked again at the end of the test.
+
+  The requests to Elorus are made by the process of `IkeEmails.Elorus.Connection`,
+  not by the test, and a `Req.Test` stub of the test (`IkeEmails.ElorusStub`) is only
+  found by the processes the test started, unless the stubs are shared. So this
+  shares them, and the test cannot be async: only one test at a time owns the stubs.
+  """
+  def configure_settings(%{scope: %Scope{} = scope} = context) do
+    if context[:async] do
+      raise ArgumentError,
+            "configure_settings/1 shares the Req.Test stubs, as the requests to Elorus " <>
+              "are made by another process: the test cannot be async"
+    end
+
+    :ok = Req.Test.set_req_test_to_shared(context)
+
+    settings = settings_fixture(scope)
+    :ok = Connection.put_credentials(scope, elorus_credentials_fixture())
+    ExUnit.Callbacks.on_exit(fn -> Connection.lock(scope) end)
+
+    %{settings: settings}
   end
 
   defp stringify(attrs), do: Map.new(attrs, fn {k, v} -> {to_string(k), v} end)

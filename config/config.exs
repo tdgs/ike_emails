@@ -22,6 +22,12 @@ config :ike_emails, IkeEmailsWeb.Endpoint,
   pubsub_server: IkeEmails.PubSub,
   live_view: [signing_salt: "d7nq+Ax8"]
 
+# What is left out of the logs: the values of the params with these in their name.
+# This is the default, said here since the password and the API key of Elorus that
+# are typed in at /settings depend on it (they are the top level params `password`
+# and `api_token`)
+config :phoenix, :filter_parameters, ["password", "token"]
+
 # Invoice PDFs are stored in S3 (SeaweedFS locally, see compose.yaml)
 config :ike_emails, IkeEmails.Storage, adapter: IkeEmails.Storage.S3
 
@@ -34,9 +40,20 @@ config :ike_emails, IkeEmails.Storage.S3,
 # not look for a collector on localhost.
 config :opentelemetry, traces_exporter: :none
 
-# The Elorus API, where the invoices for income are issued. The credentials come
-# from the environment, see config/runtime.exs
+# The Elorus API, where the invoices for income are issued. Only its address is
+# here: the API key and the organization are those of each user, kept in their
+# settings (see IkeEmails.Settings)
 config :ike_emails, IkeEmails.Elorus, base_url: "https://api.elorus.com"
+
+# The API key of Elorus of a user is sealed with a key of the server and the
+# password of the user, see IkeEmails.Settings.SealedToken. The key of the server
+# comes from the environment, see config/runtime.exs. The iterations of PBKDF2 are
+# to take 200 to 500 ms on the server
+config :ike_emails, IkeEmails.Settings.SealedToken, iterations: 600_000
+
+# The key is unlocked in a process of its own, which is gone when it was not used
+# for this long, see IkeEmails.Elorus.Connection
+config :ike_emails, IkeEmails.Elorus.Connection, idle_timeout: :timer.minutes(15)
 
 # Reading invoice PDFs with a language model is optional, and the model is set
 # by the environment, see config/runtime.exs

@@ -1,5 +1,6 @@
 defmodule IkeEmails.InvoicingElorusTest do
-  # Not async: some tests change the settings of the business
+  # Not async: the requests to Elorus are made by the process of the credentials of the
+  # user, which shares the stubs (see IkeEmails.Fixtures.configure_settings/1)
   use IkeEmails.DataCase, async: false
 
   import IkeEmails.ElorusStub
@@ -7,8 +8,10 @@ defmodule IkeEmails.InvoicingElorusTest do
 
   alias IkeEmails.Banking
   alias IkeEmails.Elorus
+  alias IkeEmails.Elorus.Connection
   alias IkeEmails.Invoicing
   alias IkeEmails.Invoicing.Invoice
+  alias IkeEmails.Settings
   alias IkeEmails.Storage.InMemory
 
   defp from_api(attrs \\ %{}), do: attrs |> invoice_json() |> Elorus.Invoice.from_api()
@@ -17,12 +20,38 @@ defmodule IkeEmails.InvoicingElorusTest do
     do: transaction_fixture(scope, Map.merge(%{"amount" => "100.00"}, attrs))
 
   setup :create_user_scope
+  setup :configure_settings
 
-  describe "search_elorus/2" do
+  # Another user, with an Elorus account of their own
+  defp other_user_with_elorus do
+    other = user_scope_fixture()
+
+    settings_fixture(
+      other,
+      %{
+        "business_name" => "Other Business",
+        "business_vat" => "EL222222222",
+        "elorus_organization_id" => "2000000000000002"
+      },
+      token: nil
+    )
+
+    credentials =
+      elorus_credentials_fixture(
+        api_token: "other-elorus-token",
+        organization_id: "2000000000000002"
+      )
+
+    :ok = Connection.put_credentials(other, credentials)
+    on_exit(fn -> Connection.lock(other) end)
+    other
+  end
+
+  describe "search_elorus/3" do
     test "asks for the invoices of the month, drafts and void ones left out", %{scope: scope} do
       stub(invoices: [])
 
-      assert {:ok, []} = Invoicing.search_elorus(income(scope), ~D[2026-10-17])
+      assert {:ok, []} = Invoicing.search_elorus(scope, income(scope), ~D[2026-10-17])
 
       assert %{
                "period_from" => "2026-10-01",
@@ -44,7 +73,7 @@ defmodule IkeEmails.InvoicingElorusTest do
         ]
       )
 
-      assert {:ok, invoices} = Invoicing.search_elorus(income(scope), ~D[2026-10-01])
+      assert {:ok, invoices} = Invoicing.search_elorus(scope, income(scope), ~D[2026-10-01])
       assert Enum.map(invoices, & &1.id) == ["2", "4", "1", "3"]
     end
 
@@ -59,13 +88,65 @@ defmodule IkeEmails.InvoicingElorusTest do
       )
 
       assert {:ok, [%{id: "2"}, %{id: "1"}]} =
-               Invoicing.search_elorus(income(scope), ~D[2026-10-01])
+               Invoicing.search_elorus(scope, income(scope), ~D[2026-10-01])
     end
 
     test "returns the error of Elorus", %{scope: scope} do
       stub(status: 401)
 
-      assert Invoicing.search_elorus(income(scope), ~D[2026-10-01]) == {:error, :unauthorized}
+      assert Invoicing.search_elorus(scope, income(scope), ~D[2026-10-01]) ==
+               {:error, :unauthorized}
+    end
+
+    test "asks with the credentials of the user", %{scope: scope} do
+      stub()
+      other = other_user_with_elorus()
+
+      assert {:ok, []} = Invoicing.search_elorus(scope, income(scope), ~D[2026-10-01])
+
+      assert %{
+               "authorization" => "Token test-elorus-token",
+               "x-elorus-organization" => "1000000243015421"
+             } = last_headers()
+
+      assert {:ok, []} = Invoicing.search_elorus(other, income(other), ~D[2026-10-01])
+
+      assert %{
+               "authorization" => "Token other-elorus-token",
+               "x-elorus-organization" => "2000000000000002"
+             } = last_headers()
+    end
+
+    test "asks for nothing while the credentials are locked", %{scope: scope} do
+      stub(invoices: [invoice_json()])
+      Connection.lock(scope)
+
+      assert Invoicing.search_elorus(scope, income(scope), ~D[2026-10-01]) == {:error, :locked}
+      assert request_paths() == []
+    end
+
+    test "asks for nothing for a user who did not unlock Elorus", %{scope: scope} do
+      stub(invoices: [invoice_json()])
+      other = user_scope_fixture()
+      settings_fixture(other)
+
+      assert Invoicing.search_elorus(other, income(other), ~D[2026-10-01]) == {:error, :locked}
+      assert request_paths() == []
+
+      # The credentials of another user are of no use to them
+      assert Connection.unlocked?(scope)
+      refute Connection.unlocked?(other)
+    end
+
+    test "does not search for the transaction of another user", %{scope: scope} do
+      stub(invoices: [invoice_json()])
+      transaction = income(user_scope_fixture())
+
+      assert_raise ArgumentError, fn ->
+        Invoicing.search_elorus(scope, transaction, ~D[2026-10-01])
+      end
+
+      assert request_paths() == []
     end
   end
 
@@ -175,10 +256,10 @@ defmodule IkeEmails.InvoicingElorusTest do
       assert {:ok, invoice} = Invoicing.import_elorus_invoice(scope, from_api(), first)
       assert request_paths() == ["/v1.2/invoices/1050000300010040/pdf/"]
 
-      Req.Test.stub(Elorus, fn _conn -> flunk("the PDF must not be downloaded again") end)
-
       assert {:ok, again} = Invoicing.import_elorus_invoice(scope, from_api(), first)
       assert {:ok, for_second} = Invoicing.import_elorus_invoice(scope, from_api(), second)
+
+      assert request_paths() == []
 
       assert again.id == invoice.id
       assert for_second.id == invoice.id
@@ -227,13 +308,13 @@ defmodule IkeEmails.InvoicingElorusTest do
       # What was typed in by hand is left as it was
       assert imported.issuer_name == "Elorus"
       assert imported.receiver_name == nil
-
-      Req.Test.stub(Elorus, fn _conn -> flunk("the PDF must not be downloaded again") end)
+      assert request_paths() == ["/v1.2/invoices/a/pdf/"]
 
       assert {:ok, %{id: id}} =
                Invoicing.import_elorus_invoice(scope, from_api(%{"id" => "a"}), income(scope))
 
       assert id == uploaded.id
+      assert request_paths() == []
     end
 
     test "leaves alone an invoice that holds the PDF but belongs to another Elorus invoice", %{
@@ -299,30 +380,71 @@ defmodule IkeEmails.InvoicingElorusTest do
     end
 
     test "needs the name of the business, and downloads nothing without it", %{scope: scope} do
-      original = Application.fetch_env!(:ike_emails, :business)
-      on_exit(fn -> Application.put_env(:ike_emails, :business, original) end)
-      Req.Test.stub(Elorus, fn _conn -> flunk("nothing must be downloaded") end)
+      stub()
 
-      for settings <- [[], [name: nil], [name: "  "]] do
-        Application.put_env(:ike_emails, :business, settings)
+      for name <- [nil, "", "   "] do
+        {:ok, _} = Settings.update_settings(scope, %{"business_name" => name})
 
         assert Invoicing.import_elorus_invoice(scope, from_api(), income(scope)) ==
                  {:error, :business_not_configured}
       end
+
+      assert request_paths() == []
+    end
+
+    test "needs the business of the user, not one that another user has", %{scope: scope} do
+      stub()
+      other = user_scope_fixture()
+      settings_fixture(other, %{"business_name" => "Other Business"}, token: nil)
+      {:ok, _} = Settings.update_settings(scope, %{"business_name" => ""})
+
+      assert Invoicing.import_elorus_invoice(scope, from_api(), income(scope)) ==
+               {:error, :business_not_configured}
+
+      assert request_paths() == []
     end
 
     test "works with a business that has no VAT number", %{scope: scope} do
-      original = Application.fetch_env!(:ike_emails, :business)
-      on_exit(fn -> Application.put_env(:ike_emails, :business, original) end)
-      Application.put_env(:ike_emails, :business, name: "Me", vat: nil)
       stub()
+      {:ok, _} = Settings.update_settings(scope, %{"business_name" => "Me", "business_vat" => ""})
 
       assert {:ok, %Invoice{issuer_name: "Me", issuer_vat: nil}} =
                Invoicing.import_elorus_invoice(scope, from_api(), income(scope))
     end
 
+    test "downloads nothing while the credentials are locked", %{scope: scope} do
+      stub()
+      Connection.lock(scope)
+      transaction = income(scope)
+
+      assert Invoicing.import_elorus_invoice(scope, from_api(), transaction) == {:error, :locked}
+
+      assert request_paths() == []
+      assert Repo.aggregate(Invoice, :count) == 0
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
+    end
+
+    test "attaches an invoice that was imported before without credentials or a business", %{
+      scope: scope
+    } do
+      stub()
+      first = income(scope)
+      second = income(scope)
+      assert {:ok, invoice} = Invoicing.import_elorus_invoice(scope, from_api(), first)
+      assert request_paths() == ["/v1.2/invoices/1050000300010040/pdf/"]
+
+      Connection.lock(scope)
+      {:ok, _} = Settings.update_settings(scope, %{"business_name" => ""})
+
+      assert {:ok, %Invoice{id: id}} = Invoicing.import_elorus_invoice(scope, from_api(), second)
+
+      assert id == invoice.id
+      assert request_paths() == []
+      assert [_] = Banking.get_transaction!(scope, second.id).invoices
+    end
+
     test "checks the invoice before it downloads the PDF", %{scope: scope} do
-      Req.Test.stub(Elorus, fn _conn -> flunk("nothing must be downloaded") end)
+      stub()
 
       assert Invoicing.import_elorus_invoice(scope, from_api(%{"total" => nil}), income(scope)) ==
                {:error, :invalid_elorus_invoice}
@@ -342,6 +464,8 @@ defmodule IkeEmails.InvoicingElorusTest do
                  from_api(%{"client_display_name" => String.duplicate("a", 300)}),
                  income(scope)
                )
+
+      assert request_paths() == []
     end
 
     test "names the file safely", %{scope: scope} do
@@ -366,7 +490,7 @@ defmodule IkeEmails.InvoicingElorusTest do
 
     test "stores the same Elorus invoice once for each user", %{scope: scope} do
       stub()
-      other = user_scope_fixture()
+      other = other_user_with_elorus()
 
       assert {:ok, mine} = Invoicing.import_elorus_invoice(scope, from_api(), income(scope))
       assert {:ok, theirs} = Invoicing.import_elorus_invoice(other, from_api(), income(other))
@@ -375,10 +499,20 @@ defmodule IkeEmails.InvoicingElorusTest do
       assert mine.user_id == scope.user.id
       assert theirs.user_id == other.user.id
       assert mine.elorus_id == theirs.elorus_id
+      # The issuer of each is their own business
+      assert {mine.issuer_name, mine.issuer_vat} == {"Test Business", "EL099999999"}
+      assert {theirs.issuer_name, theirs.issuer_vat} == {"Other Business", "EL222222222"}
       # The PDF is the same, the objects are not: deleting one leaves the other
       assert mine.file_sha256 == theirs.file_sha256
       assert mine.file_key != theirs.file_key
       assert InMemory.get(mine.file_key) == InMemory.get(theirs.file_key)
+
+      # Each PDF was asked for with the credentials of the user
+      assert [mine_headers, theirs_headers] = request_headers()
+      assert mine_headers["authorization"] == "Token test-elorus-token"
+      assert mine_headers["x-elorus-organization"] == "1000000243015421"
+      assert theirs_headers["authorization"] == "Token other-elorus-token"
+      assert theirs_headers["x-elorus-organization"] == "2000000000000002"
 
       assert {:ok, _} = Invoicing.delete_invoice(scope, mine)
       assert InMemory.get(theirs.file_key)
@@ -390,7 +524,7 @@ defmodule IkeEmails.InvoicingElorusTest do
     end
 
     test "does not attach to the transaction of another user", %{scope: scope} do
-      Req.Test.stub(Elorus, fn _conn -> flunk("nothing must be downloaded") end)
+      stub()
       other = user_scope_fixture()
       transaction = income(other)
 
@@ -398,6 +532,7 @@ defmodule IkeEmails.InvoicingElorusTest do
         Invoicing.import_elorus_invoice(scope, from_api(), transaction)
       end
 
+      assert request_paths() == []
       assert Repo.aggregate(Invoice, :count) == 0
     end
   end

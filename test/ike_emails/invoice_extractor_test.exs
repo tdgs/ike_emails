@@ -47,12 +47,46 @@ defmodule IkeEmails.InvoiceExtractorTest do
       InvoiceExtractorStub.stub({:ok, found()})
 
       InvoiceExtractor.extract(pdf_fixture(),
+        business: %{name: "Test Business", vat: "EL099999999"},
         hints: %{amount_input: "146,38", currency: "USD", date: ~D[2026-10-01]}
       )
 
       assert_receive {:extract_request, _pdf, prompt, _fields, _model}
       assert prompt =~ "Test Business, VAT number EL099999999"
       assert prompt =~ "amount 146,38, currency USD, date 2026-10-01"
+    end
+
+    test "tells the model the name of a business that has no VAT number" do
+      InvoiceExtractorStub.stub({:ok, found()})
+
+      InvoiceExtractor.extract(pdf_fixture(), business: %{name: "Me", vat: nil})
+
+      assert_receive {:extract_request, _pdf, prompt, _fields, _model}
+      assert prompt =~ "The business that keeps these invoices is Me. When it is the issuer"
+      refute prompt =~ "VAT number"
+    end
+
+    for business <- [nil, %{name: nil, vat: "EL099999999"}, %{name: "", vat: nil}] do
+      test "does not name a business without a name (#{inspect(business)})" do
+        InvoiceExtractorStub.stub({:ok, found()})
+
+        InvoiceExtractor.extract(pdf_fixture(), business: unquote(Macro.escape(business)))
+
+        assert_receive {:extract_request, _pdf, prompt, _fields, _model}
+        assert prompt =~ "Leave the receiver null unless the invoice was clearly issued"
+        refute prompt =~ "The business that keeps these invoices"
+        refute prompt =~ "EL099999999"
+      end
+    end
+
+    test "does not name a business when none is given" do
+      InvoiceExtractorStub.stub({:ok, found()})
+
+      InvoiceExtractor.extract(pdf_fixture())
+
+      assert_receive {:extract_request, _pdf, prompt, _fields, _model}
+      refute prompt =~ "The business that keeps these invoices"
+      refute prompt =~ "Test Business"
     end
 
     test "has no hints to tell when there are none" do

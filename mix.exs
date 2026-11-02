@@ -69,6 +69,9 @@ defmodule IkeEmails.MixProject do
        compile: false,
        depth: 1},
       {:bcrypt_elixir, "~> 3.0"},
+      # Seals the Elorus API key of a user, see IkeEmails.Settings.SealedToken. 2.2.1
+      # keeps the secret out of the stack trace of a failed decryption
+      {:plug_crypto, "~> 2.2.1"},
       {:swoosh, "~> 1.16"},
       {:req, "~> 0.5"},
       {:req_s3, "~> 0.2.5"},

@@ -102,4 +102,16 @@ defmodule IkeEmails.ElorusStub do
   The paths of the requests received so far.
   """
   def request_paths, do: Enum.map(request_conns(), & &1.request_path)
+
+  @doc """
+  The headers of each of the requests received so far, as maps from the name
+  (in lowercase) to the value: `"authorization"` and `"x-elorus-organization"`
+  say whose credentials a request carried.
+  """
+  def request_headers, do: Enum.map(request_conns(), &Map.new(&1.req_headers))
+
+  @doc """
+  The headers of the request received last, or `nil` without one.
+  """
+  def last_headers, do: List.last(request_headers())
 end
