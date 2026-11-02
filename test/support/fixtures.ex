@@ -1,13 +1,15 @@
 defmodule IkeEmails.Fixtures do
   @moduledoc """
-  Builds users, transactions and invoices for the tests. The transactions and
-  invoices are made for the user of a scope, see `user_scope_fixture/1`.
+  Builds users, transactions, invoices and statements for the tests. The
+  transactions, invoices and statements are made for the user of a scope, see
+  `user_scope_fixture/1`.
   """
 
   alias IkeEmails.Accounts
   alias IkeEmails.Accounts.Scope
   alias IkeEmails.Banking
   alias IkeEmails.Invoicing
+  alias IkeEmails.Statements
 
   @doc """
   A user, with the password `valid_user_password/0`.
@@ -74,6 +76,13 @@ defmodule IkeEmails.Fixtures do
       Invoicing.create_invoice(scope, invoice_attrs(attrs), pdf_fixture(), "invoice.pdf", opts)
 
     invoice
+  end
+
+  def statement_fixture(%Scope{} = scope, month \\ "2026-10") do
+    {:ok, :created, statement} =
+      Statements.put_statement(scope, month, pdf_fixture(), "statement.pdf")
+
+    statement
   end
 
   defp stringify(attrs), do: Map.new(attrs, fn {k, v} -> {to_string(k), v} end)

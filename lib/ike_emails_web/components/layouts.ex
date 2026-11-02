@@ -50,6 +50,9 @@ defmodule IkeEmailsWeb.Layouts do
             <.nav_link navigate={~p"/invoices"} active={@active == :invoices} id="nav-invoices">
               Invoices
             </.nav_link>
+            <.nav_link navigate={~p"/statements"} active={@active == :statements} id="nav-statements">
+              Statements
+            </.nav_link>
           <% end %>
         </nav>
         <div :if={@current_scope} class="flex items-center gap-3 text-sm">

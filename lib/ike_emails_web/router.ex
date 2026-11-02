@@ -45,9 +45,12 @@ defmodule IkeEmailsWeb.Router do
       live "/invoices", InvoiceLive.Index, :index
       live "/invoices/new", InvoiceLive.Index, :new
       live "/invoices/:id/edit", InvoiceLive.Index, :edit
+
+      live "/statements", StatementLive.Index, :index
     end
 
     get "/invoices/:id/pdf", InvoicePdfController, :show
+    get "/statements/:id/pdf", StatementPdfController, :show
   end
 
   # The bank crawler logs in with the email and password of a user, and pushes
@@ -62,6 +65,7 @@ defmodule IkeEmailsWeb.Router do
     pipe_through [:api, :api_auth]
 
     post "/transactions", TransactionController, :create
+    put "/statements/:month", StatementController, :create
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
