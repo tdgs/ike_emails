@@ -152,6 +152,29 @@ last three fields are optional.
 The transaction is stored for the user of the token. Two users can have the same
 `(transaction_id, amount, description)`.
 
+It also sends the PDF of the bank statement of each month, with the same token:
+
+    PUT /api/statements/2026-10
+    Authorization: Bearer <token>
+    Content-Type: multipart/form-data
+
+    file=@statement.pdf
+
+The month in the path is `YYYY-MM`. A month has one statement, so sending it again is
+safe:
+
+* `201` the statement of the month was stored.
+* `200` the month had a statement already. A different PDF replaced it, and the old
+  one is deleted; the same PDF changed nothing. The stored statement is returned.
+* `422` the month is not `YYYY-MM`, the `file` is missing, or it is not a PDF:
+  `{"errors": {"month": ["is invalid"]}}`.
+* `413` the PDF is too large. The request body is limited to 8 MB.
+* `503` the PDF could not be stored, try again.
+* `401` missing, wrong or expired token.
+
+The response is `{"data": {"id", "month": "2026-10", "file_name", "file_size",
+"file_sha256", "inserted_at", "updated_at"}}`.
+
 ## Learn more
 
 * Official website: https://www.phoenixframework.org/
