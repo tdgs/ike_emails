@@ -12,6 +12,7 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
   alias IkeEmails.InvoiceExtractor
   alias IkeEmails.Invoicing
   alias IkeEmails.Invoicing.Invoice
+  alias IkeEmails.Settings
   alias IkeEmailsWeb.InvoiceUpload
 
   @impl true
@@ -118,12 +119,15 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
     with {:configured, true} <- {:configured, InvoiceExtractor.configured?()},
          {:ok, pdf} <- InvoiceUpload.peek_pdf(socket) do
       hints = InvoiceUpload.hints(socket.assigns.invoice)
+      business = Settings.business(socket.assigns.current_scope)
 
       {:noreply,
        socket
        |> assign(:extract_error, nil)
        |> assign(:extracting?, true)
-       |> start_async(:extract, fn -> InvoiceExtractor.extract(pdf, hints: hints) end)}
+       |> start_async(:extract, fn ->
+         InvoiceExtractor.extract(pdf, hints: hints, business: business)
+       end)}
     else
       {:configured, false} ->
         message = InvoiceUpload.extraction_error_message(:not_configured)

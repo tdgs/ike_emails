@@ -20,34 +20,6 @@ if System.get_env("PHX_SERVER") do
   config :ike_emails, IkeEmailsWeb.Endpoint, server: true
 end
 
-# The Elorus API is optional: without ELORUS_API_TOKEN the integration is off.
-# The key is found under "User Profile" in Elorus. ELORUS_ORGANIZATION_ID is the
-# id of the organization to work on. ELORUS_DEMO=true makes the requests work on
-# a demo organization only. The tests have their own credentials, see
-# config/test.exs.
-elorus_token = System.get_env("ELORUS_API_TOKEN")
-
-if config_env() != :test and elorus_token not in [nil, ""] do
-  organization_id =
-    case System.get_env("ELORUS_ORGANIZATION_ID") do
-      id when id in [nil, ""] -> raise("environment variable ELORUS_ORGANIZATION_ID is missing.")
-      id -> id
-    end
-
-  # A typo must not send the requests to the real organization
-  demo =
-    case "ELORUS_DEMO" |> System.get_env("") |> String.trim() |> String.downcase() do
-      value when value in ["true", "1"] -> true
-      value when value in ["", "false", "0"] -> false
-      value -> raise("environment variable ELORUS_DEMO must be true or false, not #{value}.")
-    end
-
-  config :ike_emails, IkeEmails.Elorus,
-    api_token: elorus_token,
-    organization_id: organization_id,
-    demo: demo
-end
-
 # Reading the PDF of an invoice with a language model is optional: without
 # AI_MODEL the feature is off. AI_MODEL is a provider and a model, such as
 # anthropic:claude-sonnet-5-5 or openai:gpt-5, and the provider's own API key
@@ -80,15 +52,6 @@ if config_env() != :test and sentry_dsn not in [nil, ""] do
     sampler: {Sentry.OpenTelemetry.Sampler, []}
 end
 
-# Who you are, as the issuer of the invoices imported from Elorus (Elorus does not
-# tell). The name is needed to import them, the VAT number is optional. The
-# tests have their own, see config/test.exs.
-if config_env() != :test do
-  config :ike_emails, :business,
-    name: System.get_env("BUSINESS_NAME"),
-    vat: System.get_env("BUSINESS_VAT")
-end
-
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
@@ -118,6 +81,25 @@ if config_env() == :prod do
       environment variable SECRET_KEY_BASE is missing.
       You can generate one by calling: mix phx.gen.secret
       """
+
+  # The key that seals the Elorus API keys of the users, see
+  # IkeEmails.Settings.SealedToken: 32 random bytes in base64, made with
+  # `openssl rand -base64 32`. It is not derived from SECRET_KEY_BASE, which can be
+  # changed without losing anything. Changing this one makes the users enter their
+  # API keys again. The value is never printed.
+  settings_encryption_key =
+    case "SETTINGS_ENCRYPTION_KEY" |> System.get_env("") |> String.trim() |> Base.decode64() do
+      {:ok, key} when byte_size(key) == 32 ->
+        key
+
+      _ ->
+        raise """
+        environment variable SETTINGS_ENCRYPTION_KEY is missing, or is not 32 bytes in base64.
+        You can generate one by calling: openssl rand -base64 32
+        """
+    end
+
+  config :ike_emails, IkeEmails.Settings.SealedToken, keys: [{"1", settings_encryption_key}]
 
   config :ike_emails, IkeEmails.Storage.S3,
     bucket:

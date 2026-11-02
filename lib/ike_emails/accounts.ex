@@ -7,6 +7,12 @@ defmodule IkeEmails.Accounts do
   alias IkeEmails.Accounts.User
   alias IkeEmails.Repo
 
+  # The Elorus API key of a user is sealed with their password (see
+  # IkeEmails.Settings), and there is no way to change a password yet. When there is,
+  # a change must call IkeEmails.Settings.reseal_elorus_token(scope, old, new), and a
+  # reset (the old password is not known) must call
+  # IkeEmails.Settings.clear_elorus_token(scope), or the key cannot be opened any more.
+
   @doc """
   Creates a user from an `email` and a `password` (at least 12 characters).
   """

@@ -18,26 +18,45 @@ first: `mix setup` makes the user `dev@example.com` with the password
   invoices. A transaction gets an invoice by uploading its PDF or attaching one
   that exists, or is marked "no invoice needed" with a reason (tax, dividends, ...).
 * `/invoices` lists every invoice, and uploads one before its payment is known.
+* `/settings` is where you say who you are (the name and VAT number of your business)
+  and set up Elorus (your organization and your API key, see below).
 
-Everything belongs to a user: each user sees only their own transactions and invoices.
+Everything belongs to a user: each user sees only their own transactions, invoices and
+settings.
 
 `mix test` needs no S3 server; `mix test --include s3` also tests the S3 adapter
 against the local one.
 
 The invoices for income are issued in [Elorus](https://www.elorus.com). To read them
-through its [API](https://developer.elorus.com) (`IkeEmails.Elorus`), set
-`ELORUS_API_TOKEN` (the API key, found under "User Profile" in Elorus) and
-`ELORUS_ORGANIZATION_ID` (the id of your organization, which every invoice of the
-API carries as its `organization`). Add `ELORUS_DEMO=true` to work on a demo
-organization only. Without a token the integration is off.
+through its [API](https://developer.elorus.com) (`IkeEmails.Elorus`), each user sets up
+their own account on `/settings`: the id of their organization (which every invoice of
+the API carries as its `organization`) and their API key (found under "User Profile" in
+Elorus), and "Use the Elorus demo environment" to work on a demo organization only.
+Without a key the integration is off for that user. There are no environment variables
+for it: users can work on different organizations.
+
+The API key is kept sealed (`IkeEmails.Settings.SealedToken`): encrypted with a key made
+from both the server key `SETTINGS_ENCRYPTION_KEY` and the login password of the user,
+so a copy of the database is useless without the server key, and the server key is not
+enough without the password. The password is asked when the key is saved, and again the
+first time Elorus is used. That unlocks the key, which then lives only in memory, in a
+process of its own for the user (`IkeEmails.Elorus.Connection`), until it has not been
+used for 15 minutes, the user logs out or the server restarts. It is never in the
+database in the clear, the session, the page or the logs. Unlocking is for the user and
+not for the session: someone with a stolen session can use Elorus during that time
+without the password.
 
 With it, the panel to add an invoice to a transaction that is money in has a
 section "Invoices in Elorus": a button asks Elorus for the invoices of the month
 shown, the ones for the amount of the transaction first, and "Attach" downloads
 the PDF and stores it as an invoice of the transaction. You are the issuer of
-such an invoice, so set `BUSINESS_NAME` (and `BUSINESS_VAT`) to say who you are;
-the client of the Elorus invoice becomes its receiver. Elorus allows 60 requests a
-minute and 1000 a day per user.
+such an invoice, so set the name of your business (and its VAT number) on `/settings` to
+say who you are; the client of the Elorus invoice becomes its receiver. Elorus allows 60
+requests a minute and 1000 a day per user.
+
+In development and in the tests the server key is a fixed one, in `config/dev.exs` and
+`config/test.exs`: it is no secret, so do not put a real API key in a database that
+others can read.
 
 After a PDF is uploaded, "Extract with AI" reads it with a language model and fills
 in the form (`IkeEmails.InvoiceExtractor`); you review the values and save. It is
@@ -47,14 +66,16 @@ its own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, ...).
 work is done by [ReqLLM](https://hex.pm/packages/req_llm), which lists the providers
 and the models. The model must accept PDFs. Switching provider is a change of
 `AI_MODEL` and the key. The PDF is sent to the provider you choose, only when the
-button is clicked. Without `AI_MODEL` the feature is off.
+button is clicked. It is also told the business of the user, from `/settings`, to tell
+the invoices they issued from those they received. Without `AI_MODEL` the feature is off.
 
 In production the PDFs go to S3 or a compatible server, configured with the
 environment variables `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 and `AWS_REGION` (and `AWS_ENDPOINT_URL_S3` for a server that is not AWS).
 
-The Elorus and `BUSINESS_NAME` settings are shared: every user works on the same Elorus
-organization.
+The settings on `/settings` are not shared: every user has their own business, Elorus
+organization and API key. `AI_MODEL`, the API key of its provider and the rest of the
+environment are for the whole server.
 
 The errors are reported to [Sentry](https://sentry.io) when `SENTRY_DSN` is set (the DSN
 is in the settings of the project, use an EU project for the data to stay in the EU).
@@ -81,8 +102,13 @@ In production, where there is no Mix, use the release (on Fly:
 
     bin/ike_emails eval 'IkeEmails.Release.create_user("me@example.com", "a long password")'
 
-There is no password reset yet. Do not delete a user to start over: their transactions
-and invoices go with them.
+There is no password reset yet. Do not delete a user to start over: their transactions,
+invoices and settings (the sealed Elorus key too) go with them.
+
+The Elorus API key of a user is sealed with their password, so the day passwords can be
+changed, a change must seal the key again (`IkeEmails.Settings.reseal_elorus_token/3`),
+and a reset, where the old password is not known, must remove it
+(`IkeEmails.Settings.clear_elorus_token/1`). The user then enters the key again.
 
 ## Deploying
 
@@ -109,6 +135,38 @@ The Action needs, once:
   comment line, checked against the real host key);
 * write access of this repository to the package `ike-emails` (the package settings,
   "Manage Actions access"), or the push to ghcr.io fails with a 403.
+
+`SETTINGS_ENCRYPTION_KEY` is one of those secrets, and the container does not start
+without it: it must be 32 random bytes in base64, which
+
+    openssl rand -base64 32
+
+makes. Put it in the Environment `ike-emails-prod` and run `make sync-secrets` before
+merging, as a merge to `main` deploys. It seals the Elorus API keys that are in the
+database, so keep it with the other secrets and do not derive it from `SECRET_KEY_BASE`,
+which is changed to revoke the API tokens. If it is changed or lost nothing else is lost: the users
+enter their Elorus API keys again on `/settings`, as the old ones cannot be opened. There
+is no rotation without that, since it would take each user's password.
+
+The keys that are unlocked are in the memory of the server only, so every deploy and
+restart locks them: the first use of Elorus after one asks for the password again.
+`config/deploy.yml` sets `ERL_CRASH_DUMP_BYTES=0`, as a crash dump of the VM would hold
+the keys that are unlocked.
+
+The database is backed up every night to R2, see `deploy/backup/backup.sh`. The backup
+holds the sealed API keys, and a restore needs the age key of the backup, the
+`SETTINGS_ENCRYPTION_KEY` of the app that made it, and the password of each user to open
+them. Without the key the restored app works, but Elorus says that the key cannot be
+unlocked and the user sets it again. Removing an API key on `/settings` deletes it from
+the database but not from the backups, which are kept for 30 days: revoke it in Elorus
+to be sure, as after any leak of the server key.
+
+The Elorus and business settings used to be the environment variables `ELORUS_API_TOKEN`,
+`ELORUS_ORGANIZATION_ID`, `ELORUS_DEMO`, `BUSINESS_NAME` and `BUSINESS_VAT`, which are not
+read any more. After deploying, each user enters theirs on `/settings` and unlocks Elorus once.
+Then delete the old secrets from the Environment and from GitHub, and revoke the old
+Elorus API key and issue a new one, as it was in the GitHub secrets and the container
+environment.
 
 ## API
 

@@ -1,34 +1,28 @@
 defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
-  # Not async: the Elorus stub is shared with the tasks that call it, and some
-  # tests change the settings
+  # Not async: the Elorus stub is shared with the process of the credentials of the
+  # user, which makes the requests, and some tests change the settings
   use IkeEmailsWeb.ConnCase, async: false
 
   import IkeEmails.ElorusStub
+  import Ecto.Query, only: [from: 2]
   import IkeEmails.Fixtures
   import Phoenix.LiveViewTest
 
   alias IkeEmails.Banking
   alias IkeEmails.Elorus
+  alias IkeEmails.Elorus.Connection
   alias IkeEmails.Invoicing
   alias IkeEmails.Invoicing.Invoice
   alias IkeEmails.Repo
+  alias IkeEmails.Settings
+  alias IkeEmails.Settings.UserSettings
 
   # The tasks that call Elorus, and the failures they cause, are logged
   @moduletag :capture_log
 
-  setup {Req.Test, :set_req_test_to_shared}
-
   setup :register_and_log_in_user
-
-  setup do
-    elorus = Application.fetch_env!(:ike_emails, Elorus)
-    business = Application.fetch_env!(:ike_emails, :business)
-
-    on_exit(fn ->
-      Application.put_env(:ike_emails, Elorus, elorus)
-      Application.put_env(:ike_emails, :business, business)
-    end)
-  end
+  # The settings of the user are saved, and their credentials unlocked
+  setup :configure_settings
 
   defp income(scope, attrs \\ %{}),
     do: transaction_fixture(scope, Map.merge(%{"amount" => "100.00"}, attrs))
@@ -39,7 +33,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
   defp elorus_row(id), do: "#elorus_invoices-#{id}"
 
   # The results arrive from a task, after the click
-  defp wait_for(view, selector, tries \\ 100) do
+  defp wait_for(view, selector, tries \\ 500) do
     cond do
       has_element?(view, selector) -> :ok
       tries == 0 -> flunk("#{selector} did not show up")
@@ -47,8 +41,67 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
     end
   end
 
+  # The stubs that hold a request run in the process of the credentials, which goes on
+  # when they are released: what ends is the task of the page that waits for them
+  defp release(connection) do
+    send(connection, :release)
+    wait_for_tasks()
+  end
+
+  defp wait_for_tasks(tries \\ 500) do
+    cond do
+      Task.Supervisor.children(IkeEmails.TaskSupervisor) == [] -> :ok
+      tries == 0 -> flunk("the task did not end")
+      true -> Process.sleep(10) && wait_for_tasks(tries - 1)
+    end
+  end
+
+  defp wait_until_locked(scope, tries \\ 500) do
+    cond do
+      not Connection.unlocked?(scope) -> :ok
+      tries == 0 -> flunk("the credentials were not locked")
+      true -> Process.sleep(10) && wait_until_locked(scope, tries - 1)
+    end
+  end
+
+  # The process of the connection is made busy with a request that does not end until
+  # it is released, so an unlock waits for it, after it opened the key. Returns it.
+  defp hold_connection(scope) do
+    test = self()
+
+    Req.Test.stub(Elorus, fn conn ->
+      send(test, {:blocked, self()})
+
+      receive do
+        :release -> :ok
+      after
+        5_000 -> :timeout
+      end
+
+      Req.Test.json(conn, %{"count" => 0, "next" => nil, "previous" => nil, "results" => []})
+    end)
+
+    :ok = Connection.put_credentials(scope, elorus_credentials_fixture())
+    Task.async(fn -> Connection.list_all_invoices(scope) end)
+    assert_receive {:blocked, connection}, 5_000
+    connection
+  end
+
+  # What it takes for the key to be opened and the unlock to wait for the process
+  defp wait_until_queued(connection, tries \\ 500) do
+    cond do
+      Process.info(connection, :message_queue_len) == {:message_queue_len, 1} -> :ok
+      tries == 0 -> flunk("the unlock did not wait for the process")
+      true -> Process.sleep(10) && wait_until_queued(connection, tries - 1)
+    end
+  end
+
   defp search(view) do
     view |> element("#search-elorus") |> render_click()
+  end
+
+  defp unlock(view, password) do
+    view |> form("#elorus-unlock-form", %{"password" => password}) |> render_submit()
   end
 
   defp listed_ids(view) do
@@ -81,19 +134,369 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
 
     test "tells how to set Elorus up when it is not", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json()])
-      config = Application.fetch_env!(:ike_emails, Elorus)
-      Application.put_env(:ike_emails, Elorus, Keyword.put(config, :api_token, nil))
+      Settings.clear_elorus_token(scope)
 
       {:ok, view, _html} = live(conn, panel(income(scope)))
 
-      assert has_element?(view, "#elorus-unconfigured")
+      assert has_element?(view, "#elorus-unconfigured a[href='/settings']")
       refute has_element?(view, "#search-elorus")
+      refute has_element?(view, "#elorus-unlock-form")
 
       render_hook(view, "search_elorus", %{})
 
       refute_receive {:elorus_request, _}, 200
       refute has_element?(view, "#elorus-error")
       refute has_element?(view, "#elorus-invoices")
+    end
+
+    test "tells how to set Elorus up when it has no organization", %{conn: conn, scope: scope} do
+      stub(invoices: [invoice_json()])
+      {:ok, _} = Settings.update_settings(scope, %{"elorus_organization_id" => ""})
+
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+
+      assert has_element?(view, "#elorus-unconfigured a[href='/settings']")
+      refute has_element?(view, "#search-elorus")
+      refute has_element?(view, "#elorus-unlock-form")
+    end
+
+    test "is not set up for a user who has not saved settings", %{conn: conn} do
+      stub(invoices: [invoice_json()])
+      user = user_fixture()
+      scope = user_scope_fixture(user)
+
+      {:ok, view, _html} = live(log_in_user(conn, user), panel(income(scope)))
+
+      assert has_element?(view, "#elorus-unconfigured")
+      refute has_element?(view, "#search-elorus")
+    end
+
+    test "does not use the credentials that another user unlocked", %{conn: conn} do
+      stub(invoices: [invoice_json()])
+      user = user_fixture()
+      scope = user_scope_fixture(user)
+      settings_fixture(scope, %{"elorus_organization_id" => "2000000000000002"})
+
+      # Their own are not unlocked, though those of the user of the test are
+      {:ok, view, _html} = live(log_in_user(conn, user), panel(income(scope)))
+
+      assert has_element?(view, "#elorus-unlock-form")
+      refute has_element?(view, "#search-elorus")
+    end
+  end
+
+  describe "locked" do
+    setup %{scope: scope} do
+      Connection.lock(scope)
+      :ok
+    end
+
+    test "asks for the password before it offers a search", %{conn: conn, scope: scope} do
+      stub(invoices: [invoice_json()])
+
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+
+      assert has_element?(view, "#elorus-unlock-form")
+      assert has_element?(view, "#elorus-unlock-form input[type=password][name=password]")
+      assert has_element?(view, "#elorus-unlock-form input[autocomplete=current-password]")
+      refute has_element?(view, "#search-elorus")
+      refute has_element?(view, "#elorus-unconfigured")
+      refute has_element?(view, "#elorus-error")
+
+      render_hook(view, "search_elorus", %{})
+
+      refute_receive {:elorus_request, _}, 200
+      refute has_element?(view, "#elorus-invoices")
+    end
+
+    test "asks again when the panel is opened after the window ended", %{
+      conn: conn,
+      scope: scope
+    } do
+      stub()
+      transaction = income(scope)
+      :ok = Connection.put_credentials(scope, elorus_credentials_fixture())
+
+      {:ok, view, _html} = live(conn, panel(transaction))
+      assert has_element?(view, "#search-elorus")
+
+      Connection.lock(scope)
+      render_patch(view, ~p"/?month=2026-10")
+      render_patch(view, panel(transaction))
+
+      assert has_element?(view, "#elorus-unlock-form")
+      refute has_element?(view, "#search-elorus")
+    end
+
+    test "unlocks with the password, and searches", %{conn: conn, scope: scope} do
+      stub(invoices: [invoice_json(%{"id" => "a"})])
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+
+      unlock(view, valid_user_password())
+      wait_for(view, "#search-elorus")
+
+      refute has_element?(view, "#elorus-unlock-form")
+      refute has_element?(view, "#elorus-error")
+      assert Connection.unlocked?(scope)
+      refute_receive {:elorus_request, _}, 100
+
+      search(view)
+      wait_for(view, elorus_row("a"))
+
+      assert %{
+               "authorization" => "Token test-elorus-token",
+               "x-elorus-organization" => "1000000243015421"
+             } = last_headers()
+
+      # Nothing of the password or the API key is in the page
+      html = render(view)
+      refute html =~ valid_user_password()
+      refute html =~ "test-elorus-token"
+    end
+
+    test "refuses a wrong password, and keeps asking", %{conn: conn, scope: scope} do
+      stub(invoices: [invoice_json()])
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+
+      unlock(view, "not the password 123")
+      wait_for(view, "#elorus-error")
+
+      assert has_element?(view, "#elorus-error", "That password is not right")
+      assert has_element?(view, "#elorus-unlock-form")
+      refute has_element?(view, "#search-elorus")
+      refute Connection.unlocked?(scope)
+      refute render(view) =~ "not the password 123"
+
+      render_hook(view, "search_elorus", %{})
+      refute_receive {:elorus_request, _}, 100
+
+      # The right one works afterwards, and the message is gone
+      unlock(view, valid_user_password())
+      wait_for(view, "#search-elorus")
+      refute has_element?(view, "#elorus-error")
+    end
+
+    test "says when the saved API key cannot be opened", %{conn: conn, scope: scope} do
+      user_id = scope.user.id
+
+      {1, _} =
+        Repo.update_all(
+          from(s in UserSettings, where: s.user_id == ^user_id),
+          set: [elorus_token_salt: Base.url_encode64("another salt 1234", padding: false)]
+        )
+
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+
+      unlock(view, valid_user_password())
+      wait_for(view, "#elorus-error")
+
+      assert has_element?(view, "#elorus-error", "cannot be unlocked")
+      assert has_element?(view, "#elorus-unlock-form")
+      refute Connection.unlocked?(scope)
+    end
+
+    test "follows the settings when the API key was removed meanwhile", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+      Settings.clear_elorus_token(scope)
+
+      unlock(view, valid_user_password())
+      wait_for(view, "#elorus-unconfigured")
+
+      assert has_element?(view, "#elorus-unconfigured a[href='/settings']")
+      assert has_element?(view, "#elorus-error", "in Settings")
+      refute has_element?(view, "#elorus-unlock-form")
+    end
+
+    test "unlocks once when the form is sent twice", %{conn: conn, scope: scope} do
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+      connection = hold_connection(scope)
+
+      # The first is in the middle of it, and stays until the process is released
+      unlock(view, valid_user_password())
+      wait_until_queued(connection)
+      assert has_element?(view, "#unlock-elorus[disabled]")
+      {:links, links} = Process.info(view.pid, :links)
+
+      render_hook(view, "unlock_elorus", %{"password" => valid_user_password()})
+
+      # No other task opens the key
+      assert Process.info(view.pid, :links) == {:links, links}
+      assert Process.info(connection, :message_queue_len) == {:message_queue_len, 1}
+
+      release(connection)
+      wait_for(view, "#search-elorus")
+
+      refute has_element?(view, "#elorus-error")
+      assert Connection.unlocked?(scope)
+    end
+
+    test "asks again when it was locked while the key was opened", %{conn: conn, scope: scope} do
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+      connection = hold_connection(scope)
+
+      unlock(view, valid_user_password())
+      wait_until_queued(connection)
+
+      # The user removed the key, or changed the organization, in another tab
+      Connection.lock(scope)
+      wait_for(view, "#elorus-error")
+
+      assert has_element?(view, "#elorus-error", "Enter your password to use Elorus again")
+      assert has_element?(view, "#elorus-unlock-form")
+      refute has_element?(view, "#search-elorus")
+      refute Connection.unlocked?(scope)
+    end
+
+    test "ignores an unlock that is not for a locked panel", %{conn: conn, scope: scope} do
+      stub()
+      :ok = Connection.put_credentials(scope, elorus_credentials_fixture())
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+
+      render_hook(view, "unlock_elorus", %{"password" => "not the password 123"})
+
+      refute has_element?(view, "#elorus-error")
+      assert has_element?(view, "#search-elorus")
+      assert Connection.unlocked?(scope)
+    end
+
+    test "keeps the password out of the logs and the state of the view", %{
+      conn: conn,
+      scope: scope
+    } do
+      stub()
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+      password = valid_user_password()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          unlock(view, password)
+          wait_for(view, "#search-elorus")
+        end)
+
+      refute log =~ password
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.elorus_state == :unlocked
+      refute inspect(assigns, limit: :infinity) =~ password
+      refute inspect(assigns, limit: :infinity) =~ "test-elorus-token"
+    end
+  end
+
+  describe "when the window ends" do
+    test "a search asks for the password again", %{conn: conn, scope: scope} do
+      stub(invoices: [invoice_json()])
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+      assert has_element?(view, "#search-elorus")
+
+      # What the idle timeout of the process does
+      Connection.lock(scope)
+      search(view)
+
+      wait_for(view, "#elorus-unlock-form")
+      assert has_element?(view, "#elorus-error", "Enter your password to use Elorus again")
+      refute has_element?(view, "#search-elorus")
+      refute_receive {:elorus_request, _}, 100
+
+      unlock(view, valid_user_password())
+      wait_for(view, "#search-elorus")
+      refute has_element?(view, "#elorus-error")
+    end
+
+    test "ends by itself when it is not used", %{conn: conn, scope: scope} do
+      stub(invoices: [invoice_json()])
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+      assert has_element?(view, "#search-elorus")
+
+      # What the end of the window sends to the process: the timer is tested with it
+      assert [{connection, _}] = Registry.lookup(IkeEmails.Elorus.Registry, scope.user.id)
+      send(connection, :timeout)
+      wait_until_locked(scope)
+      search(view)
+
+      wait_for(view, "#elorus-unlock-form")
+      assert has_element?(view, "#elorus-error", "Enter your password to use Elorus again")
+      refute has_element?(view, "#search-elorus")
+    end
+
+    test "an import asks for the password again, and does not store anything", %{
+      conn: conn,
+      scope: scope
+    } do
+      stub(invoices: [invoice_json(%{"id" => "a"})])
+      transaction = income(scope)
+
+      {:ok, view, _html} = live(conn, panel(transaction))
+      search(view)
+      wait_for(view, "#attach-elorus-a")
+
+      Connection.lock(scope)
+      view |> element("#attach-elorus-a") |> render_click()
+
+      wait_for(view, "#elorus-unlock-form")
+      assert has_element?(view, "#elorus-error", "Enter your password to use Elorus again")
+      assert has_element?(view, "#attach-panel")
+      assert Banking.get_transaction!(scope, transaction.id).invoices == []
+      assert Repo.aggregate(Invoice, :count) == 0
+
+      # The invoices that were listed stay
+      assert has_element?(view, elorus_row("a"))
+      assert request_paths() == ["/v1.2/invoices/"]
+    end
+
+    test "an invoice that was imported before is attached without the password", %{
+      conn: conn,
+      scope: scope
+    } do
+      stub(invoices: [invoice_json(%{"id" => "a"})])
+
+      {:ok, _} =
+        Invoicing.import_elorus_invoice(
+          scope,
+          Elorus.Invoice.from_api(invoice_json(%{"id" => "a"})),
+          income(scope)
+        )
+
+      transaction = income(scope)
+      {:ok, view, _html} = live(conn, panel(transaction))
+      search(view)
+      wait_for(view, "#attach-elorus-a")
+      request_paths()
+
+      Connection.lock(scope)
+      view |> element("#attach-elorus-a") |> render_click()
+      assert_patch(view, ~p"/?month=2026-10", 5_000)
+
+      assert request_paths() == []
+      assert has_element?(view, "#status-#{transaction.id}[data-status=invoiced]")
+    end
+
+    test "ends in the middle of an import, which says so when the panel was closed", %{
+      conn: conn,
+      scope: scope
+    } do
+      stub_slow_pdf()
+      transaction = income(scope)
+
+      {:ok, view, _html} = live(conn, panel(transaction))
+      search(view)
+      wait_for(view, "#attach-elorus-a")
+      view |> element("#attach-elorus-a") |> render_click()
+      assert_receive {:blocked, _connection}, 5_000
+
+      render_patch(view, ~p"/?month=2026-10")
+      Connection.lock(scope)
+      wait_for(view, "#flash-error")
+
+      assert has_element?(view, "#flash-error", "was not attached")
+      assert has_element?(view, "#flash-error", "Enter your password to use Elorus again")
+      assert Repo.aggregate(Invoice, :count) == 0
+
+      render_patch(view, panel(transaction))
+      assert has_element?(view, "#elorus-unlock-form")
+      refute has_element?(view, "#search-elorus")
     end
   end
 
@@ -200,15 +603,48 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       refute has_element?(view, "#elorus-error")
     end
 
-    test "shows a crashed task as a failure", %{conn: conn, scope: scope} do
+    test "shows a task that died as a failure", %{conn: conn, scope: scope} do
+      test = self()
+
+      Req.Test.stub(Elorus, fn conn ->
+        send(test, {:blocked, self()})
+
+        receive do
+          :release -> :ok
+        after
+          5_000 -> :timeout
+        end
+
+        Req.Test.json(conn, %{"count" => 0, "next" => nil, "previous" => nil, "results" => []})
+      end)
+
+      {:ok, view, _html} = live(conn, panel(income(scope)))
+      search(view)
+      assert_receive {:blocked, connection}, 5_000
+
+      assert [task] = Task.Supervisor.children(IkeEmails.TaskSupervisor)
+      Process.exit(task, :kill)
+
+      wait_for(view, "#elorus-error")
+      assert has_element?(view, "#elorus-error", "Something went wrong with Elorus")
+      assert has_element?(view, "#search-elorus:not([disabled])")
+
+      send(connection, :release)
+    end
+
+    test "locks Elorus when a request crashes the process of the credentials", %{
+      conn: conn,
+      scope: scope
+    } do
       Req.Test.stub(Elorus, fn _conn -> raise "boom" end)
 
       {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
 
-      wait_for(view, "#elorus-error")
-      assert has_element?(view, "#elorus-error", "Something went wrong with Elorus")
-      assert has_element?(view, "#search-elorus:not([disabled])")
+      wait_for(view, "#elorus-unlock-form")
+      assert has_element?(view, "#elorus-error", "Enter your password to use Elorus again")
+      refute has_element?(view, "#search-elorus")
+      refute Connection.unlocked?(scope)
     end
 
     test "shows a failed connection as such", %{conn: conn, scope: scope} do
@@ -261,7 +697,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       transaction = income(scope)
       {:ok, view, _html} = live(conn, panel(transaction))
       search(view)
-      assert_receive {:blocked, task}, 1_000
+      assert_receive {:blocked, task}, 5_000
 
       assert has_element?(view, "#search-elorus[disabled]", "Searching")
       render_hook(view, "search_elorus", %{})
@@ -271,9 +707,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       render_patch(view, ~p"/?month=2026-10")
       render_patch(view, panel(transaction))
 
-      ref = Process.monitor(task)
-      send(task, :release)
-      assert_receive {:DOWN, ^ref, :process, ^task, _reason}
+      release(task)
+      # What the page does with the answer is done once it answers this
+      render(view)
 
       assert has_element?(view, "#search-elorus:not([disabled])")
       refute has_element?(view, "#elorus-invoices")
@@ -294,7 +730,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       wait_for(view, "#attach-elorus-a")
 
       view |> element("#attach-elorus-a") |> render_click()
-      assert_patch(view, ~p"/?month=2026-10", 1_000)
+      assert_patch(view, ~p"/?month=2026-10", 5_000)
 
       assert has_element?(view, "#flash-info", "Invoice attached from Elorus")
       assert has_element?(view, "#status-#{transaction.id}[data-status=invoiced]")
@@ -321,7 +757,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       search(view)
       wait_for(view, "#attach-elorus-a")
       view |> element("#attach-elorus-a") |> render_click()
-      assert_patch(view, ~p"/?month=2026-10", 1_000)
+      assert_patch(view, ~p"/?month=2026-10", 5_000)
 
       assert request_paths() == ["/v1.2/invoices/"]
       assert has_element?(view, "#status-#{transaction.id}[data-status=invoiced]")
@@ -346,7 +782,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
 
     test "says when the business has no name", %{conn: conn, scope: scope} do
       stub(invoices: [invoice_json(%{"id" => "a"})])
-      Application.put_env(:ike_emails, :business, [])
+      {:ok, _} = Settings.update_settings(scope, %{"business_name" => ""})
 
       {:ok, view, _html} = live(conn, panel(income(scope)))
       search(view)
@@ -354,7 +790,9 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       view |> element("#attach-elorus-a") |> render_click()
 
       wait_for(view, "#elorus-error")
-      assert has_element?(view, "#elorus-error", "BUSINESS_NAME")
+      assert has_element?(view, "#elorus-error", "name of your business in Settings")
+      refute has_element?(view, "#elorus-unlock-form")
+      assert request_paths() == ["/v1.2/invoices/"]
     end
 
     test "says what is wrong with an invoice that cannot be stored", %{conn: conn, scope: scope} do
@@ -436,12 +874,6 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       end)
     end
 
-    defp release(task) do
-      ref = Process.monitor(task)
-      send(task, :release)
-      assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 1_000
-    end
-
     test "shows that it runs, and keeps the buttons from being used", %{conn: conn, scope: scope} do
       stub_slow_pdf()
       transaction = income(scope)
@@ -452,7 +884,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       refute has_element?(view, "#elorus-invoices[data-busy]")
 
       view |> element("#attach-elorus-a") |> render_click()
-      assert_receive {:blocked, task}, 1_000
+      assert_receive {:blocked, task}, 5_000
 
       assert has_element?(view, "#elorus-invoices[data-busy]")
       assert has_element?(view, "#elorus-importing")
@@ -463,7 +895,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       refute_receive {:blocked, _other}, 100
 
       release(task)
-      assert_patch(view, ~p"/?month=2026-10", 1_000)
+      assert_patch(view, ~p"/?month=2026-10", 5_000)
       assert has_element?(view, "#status-#{transaction.id}[data-status=invoiced]")
     end
 
@@ -478,7 +910,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       search(view)
       wait_for(view, "#attach-elorus-a")
       view |> element("#attach-elorus-a") |> render_click()
-      assert_receive {:blocked, task}, 1_000
+      assert_receive {:blocked, task}, 5_000
 
       render_patch(view, ~p"/?month=2026-10")
       assert has_element?(view, "#status-#{transaction.id}[data-status=income]")
@@ -506,7 +938,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       search(view)
       wait_for(view, "#attach-elorus-a")
       view |> element("#attach-elorus-a") |> render_click()
-      assert_receive {:blocked, task}, 1_000
+      assert_receive {:blocked, task}, 5_000
 
       render_patch(view, ~p"/?month=2026-10")
       release(task)
@@ -527,7 +959,7 @@ defmodule IkeEmailsWeb.ReconciliationElorusLiveTest do
       search(view)
       wait_for(view, "#attach-elorus-a")
       view |> element("#attach-elorus-a") |> render_click()
-      assert_patch(view, ~p"/?month=2026-10", 1_000)
+      assert_patch(view, ~p"/?month=2026-10", 5_000)
 
       assert [%Invoice{id: id}] = Banking.get_transaction!(scope, transaction.id).invoices
 

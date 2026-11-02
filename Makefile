@@ -19,9 +19,8 @@ deploy:
 # after changing one. The values go from 1Password to GitHub and are never printed.
 sync-secrets:
 	op run --environment <1password-environment-id> -- sh -c '\
-		for name in SECRET_KEY_BASE POSTGRES_PASSWORD BANK_API_TOKEN AWS_ACCESS_KEY_ID \
-			AWS_SECRET_ACCESS_KEY ELORUS_ORGANIZATION_ID ELORUS_API_TOKEN ANTHROPIC_API_KEY \
-			SENTRY_DSN; do \
+		for name in SECRET_KEY_BASE SETTINGS_ENCRYPTION_KEY POSTGRES_PASSWORD BANK_API_TOKEN \
+			AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ANTHROPIC_API_KEY SENTRY_DSN; do \
 			printenv $$name | gh secret set $$name --env production || exit 1; \
 		done'
 	op read "op://Employee/ike-emails GitHub Actions deploy key/private key?ssh-format=openssh" \

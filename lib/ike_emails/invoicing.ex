@@ -14,6 +14,7 @@ defmodule IkeEmails.Invoicing do
   alias IkeEmails.Invoicing.Invoice
   alias IkeEmails.Money
   alias IkeEmails.Repo
+  alias IkeEmails.Settings
   alias IkeEmails.Storage
 
   @max_pdf_bytes 20_000_000
@@ -306,9 +307,13 @@ defmodule IkeEmails.Invoicing do
   ones left out), the ones that could be the invoice of the transaction first.
   The others keep the order Elorus gave, newest first.
 
-  Errors are those of `IkeEmails.Elorus.list_all_invoices/2`.
+  The search is made with the Elorus credentials the user unlocked (see
+  `IkeEmails.Elorus.Connection`). Errors are those of
+  `IkeEmails.Elorus.list_all_invoices/3`, and `:locked` when they are not unlocked.
   """
-  def search_elorus(%Transaction{} = transaction, %Date{} = month) do
+  def search_elorus(%Scope{} = scope, %Transaction{} = transaction, %Date{} = month) do
+    Scope.authorize!(scope, transaction)
+
     params = [
       period_from: Date.beginning_of_month(month),
       period_to: Date.end_of_month(month),
@@ -316,7 +321,7 @@ defmodule IkeEmails.Invoicing do
       is_void: false
     ]
 
-    with {:ok, invoices} <- Elorus.list_all_invoices(params) do
+    with {:ok, invoices} <- Elorus.Connection.list_all_invoices(scope, params) do
       {matching, others} = Enum.split_with(invoices, &elorus_match?(&1, transaction))
       {:ok, matching ++ others}
     end
@@ -359,13 +364,15 @@ defmodule IkeEmails.Invoicing do
   Makes the Elorus invoice the invoice of the transaction: downloads its PDF,
   stores it with the invoice, and links the transaction, as an upload would.
 
-  An invoice that was imported before is only attached, and so is the invoice
-  that already holds the same PDF (which is taken as the import of the Elorus
-  invoice, if it was not one). The issuer is the business of the
-  `:business` settings, the receiver the client of the Elorus invoice.
+  An invoice that was imported before is only attached, which needs no
+  credentials, and so is the invoice that already holds the same PDF (which is
+  taken as the import of the Elorus invoice, if it was not one). The issuer is the
+  business of the user (see `IkeEmails.Settings.business/1`), the receiver the
+  client of the Elorus invoice. The PDF is downloaded with the credentials the
+  user unlocked (see `IkeEmails.Elorus.Connection`).
 
   Returns `{:ok, invoice}`, or `{:error, reason}`: `:business_not_configured`,
-  an `IkeEmails.Elorus` error, or any error of `create_invoice/5`.
+  `:locked`, an `IkeEmails.Elorus` error, or any error of `create_invoice/5`.
   """
   def import_elorus_invoice(
         %Scope{} = scope,
@@ -381,10 +388,10 @@ defmodule IkeEmails.Invoicing do
   end
 
   defp download_and_create(scope, elorus_invoice, transaction) do
-    with {:ok, business} <- business(),
+    with {:ok, business} <- business(scope),
          {:ok, attrs} <- elorus_attrs(elorus_invoice, business),
          :ok <- check_attrs(attrs),
-         {:ok, pdf} <- Elorus.invoice_pdf(elorus_invoice.id) do
+         {:ok, pdf} <- Elorus.Connection.invoice_pdf(scope, elorus_invoice.id) do
       scope
       |> create_invoice(attrs, pdf, elorus_file_name(elorus_invoice),
         transaction_ids: [transaction.id],
@@ -456,12 +463,10 @@ defmodule IkeEmails.Invoicing do
     with :ok <- attach(scope, invoice, transaction), do: {:ok, get_invoice!(scope, invoice.id)}
   end
 
-  defp business do
-    settings = Application.get_env(:ike_emails, :business, [])
-
-    case settings[:name] |> to_string() |> String.trim() do
-      "" -> {:error, :business_not_configured}
-      name -> {:ok, %{name: name, vat: settings[:vat]}}
+  defp business(scope) do
+    case Settings.business(scope) do
+      nil -> {:error, :business_not_configured}
+      business -> {:ok, business}
     end
   end
 

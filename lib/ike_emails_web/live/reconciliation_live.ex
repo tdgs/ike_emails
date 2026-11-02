@@ -15,6 +15,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   alias IkeEmails.InvoiceExtractor
   alias IkeEmails.Invoicing
   alias IkeEmails.Money
+  alias IkeEmails.Settings
   alias IkeEmailsWeb.InvoiceUpload
 
   @impl true
@@ -28,7 +29,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
      |> assign(:duplicate, nil)
      |> assign(:pdf_error, nil)
      |> assign(:suggestion_search, "")
-     |> assign(:elorus_configured?, Elorus.configured?())
+     |> assign(:elorus_unlocking?, false)
      |> assign(:extract_configured?, InvoiceExtractor.configured?())
      |> assign(:extracting?, false)
      |> assign(:extract_error, nil)
@@ -111,6 +112,8 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   # What the panel knows of Elorus. A search that is still running is forgotten,
   # and its result ignored when it arrives, see handle_info/2. An import is not:
   # it goes on whatever panel is open, and says how it ended when it is done.
+  # Whether Elorus is set up and unlocked is asked again each time, so that it is
+  # never older than the panel.
   defp reset_elorus(socket) do
     task =
       case socket.assigns[:elorus_task] do
@@ -119,6 +122,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
       end
 
     socket
+    |> assign(:elorus_state, elorus_state(socket.assigns.current_scope))
     |> assign(:elorus_task, task)
     |> assign(:elorus_loaded?, false)
     |> assign(:elorus_error, nil)
@@ -212,12 +216,15 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     with {:configured, true} <- {:configured, InvoiceExtractor.configured?()},
          {:ok, pdf} <- InvoiceUpload.peek_pdf(socket) do
       hints = InvoiceUpload.hints(socket.assigns.prefill)
+      business = Settings.business(socket.assigns.current_scope)
 
       {:noreply,
        socket
        |> assign(:extract_error, nil)
        |> assign(:extracting?, true)
-       |> start_async(:extract, fn -> InvoiceExtractor.extract(pdf, hints: hints) end)}
+       |> start_async(:extract, fn ->
+         InvoiceExtractor.extract(pdf, hints: hints, business: business)
+       end)}
     else
       {:configured, false} ->
         message = InvoiceUpload.extraction_error_message(:not_configured)
@@ -276,10 +283,12 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   def handle_event("search_elorus", _params, socket) do
     if elorus_ready?(socket) do
-      %{transaction: transaction, month: month} = socket.assigns
+      %{transaction: transaction, month: month, current_scope: scope} = socket.assigns
 
       {:noreply,
-       start_elorus_task(socket, :search, fn -> Invoicing.search_elorus(transaction, month) end)}
+       start_elorus_task(socket, :search, fn ->
+         Invoicing.search_elorus(scope, transaction, month)
+       end)}
     else
       {:noreply, socket}
     end
@@ -296,6 +305,22 @@ defmodule IkeEmailsWeb.ReconciliationLive do
        end)}
     else
       _ -> {:noreply, socket}
+    end
+  end
+
+  # The password is only in the closure of the task, which opens the API key (that
+  # takes a while, as it is made to). It is never an assign, a flash or a result.
+  def handle_event("unlock_elorus", %{"password" => password}, socket) when is_binary(password) do
+    if socket.assigns.elorus_state == :locked and not socket.assigns.elorus_unlocking? do
+      scope = socket.assigns.current_scope
+
+      {:noreply,
+       socket
+       |> assign(:elorus_unlocking?, true)
+       |> assign(:elorus_error, nil)
+       |> start_async(:unlock_elorus, fn -> Elorus.Connection.unlock(scope, password) end)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -333,6 +358,25 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     {:noreply, extract_failed(socket, :crashed)}
   end
 
+  def handle_async(:unlock_elorus, {:ok, :ok}, socket) do
+    {:noreply,
+     socket
+     |> assign(:elorus_unlocking?, false)
+     |> assign(:elorus_state, :unlocked)
+     |> assign(:elorus_error, nil)}
+  end
+
+  def handle_async(:unlock_elorus, {:ok, {:error, reason}}, socket) do
+    {:noreply, socket |> assign(:elorus_unlocking?, false) |> elorus_unavailable(reason)}
+  end
+
+  def handle_async(:unlock_elorus, {:exit, _reason}, socket) do
+    # The reason is left out of the log: it can hold the arguments of the call, and
+    # the password is one of them
+    Logger.error("Unlocking Elorus crashed")
+    {:noreply, socket |> assign(:elorus_unlocking?, false) |> elorus_unavailable(:crashed)}
+  end
+
   defp extract_failed(socket, reason) do
     socket
     |> assign(:extracting?, false)
@@ -344,11 +388,32 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   # The calls to Elorus and the import of a PDF take a while, so they run in a
   # task of the task supervisor, and the LiveView goes on meanwhile. One at a time.
 
+  # Whether the user has set Elorus up, and unlocked it with their password for a
+  # while (see IkeEmails.Elorus.Connection): :not_configured, :locked or :unlocked
+  defp elorus_state(scope) do
+    cond do
+      not Settings.elorus_configured?(scope) -> :not_configured
+      Elorus.Connection.unlocked?(scope) -> :unlocked
+      true -> :locked
+    end
+  end
+
   defp elorus_ready?(socket) do
     transaction = socket.assigns.transaction
 
-    socket.assigns.elorus_configured? and socket.assigns.elorus_task == nil and
+    socket.assigns.elorus_state == :unlocked and socket.assigns.elorus_task == nil and
       transaction != nil and income?(transaction)
+  end
+
+  # The window of the unlocked credentials ended, or the settings changed, since the
+  # state was asked: the panel follows
+  defp follow_elorus_state(socket, reason) when reason in [:locked, :not_configured],
+    do: assign(socket, :elorus_state, reason)
+
+  defp follow_elorus_state(socket, _reason), do: socket
+
+  defp elorus_unavailable(socket, reason) do
+    socket |> follow_elorus_state(reason) |> assign(:elorus_error, elorus_error_message(reason))
   end
 
   defp income?(transaction), do: Decimal.positive?(transaction.amount)
@@ -408,6 +473,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   defp elorus_failed(socket, task, reason) do
     message = elorus_error_message(reason)
+    socket = follow_elorus_state(socket, reason)
 
     if open_panel?(socket, task),
       do: assign(socket, :elorus_error, message),
@@ -428,7 +494,20 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     do: "Elorus is limiting requests. Try again in a minute."
 
   defp elorus_error_message(:business_not_configured),
-    do: "Set BUSINESS_NAME to import invoices from Elorus."
+    do: "Set the name of your business in Settings to import invoices from Elorus."
+
+  defp elorus_error_message(:locked), do: "Enter your password to use Elorus again."
+
+  defp elorus_error_message(:not_configured),
+    do: "Add your Elorus API key and organization in Settings to use Elorus."
+
+  defp elorus_error_message(:invalid_credentials),
+    do: "The Elorus API key or organization in Settings cannot be used. Set them again there."
+
+  defp elorus_error_message(:invalid_password), do: "That password is not right."
+
+  defp elorus_error_message(:undecryptable),
+    do: "Your saved Elorus key cannot be unlocked, set it again in Settings."
 
   defp elorus_error_message(:not_found), do: "Elorus does not have that invoice any more."
 
@@ -668,7 +747,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
                 Invoices in Elorus
               </h3>
               <.button
-                :if={@elorus_configured?}
+                :if={@elorus_state == :unlocked}
                 id="search-elorus"
                 type="button"
                 class="btn btn-sm"
@@ -681,14 +760,46 @@ defmodule IkeEmailsWeb.ReconciliationLive do
                   else: "Search #{month_title(@month)}"}
               </.button>
               <p
-                :if={!@elorus_configured?}
+                :if={@elorus_state == :not_configured}
                 id="elorus-unconfigured"
                 class="text-sm text-base-content/60"
               >
-                Set <code>ELORUS_API_TOKEN</code>
-                and <code>ELORUS_ORGANIZATION_ID</code>
+                Add your Elorus API key and organization in
+                <.link navigate={~p"/settings"} class="font-medium text-primary hover:underline">
+                  Settings
+                </.link>
                 to look up invoices in Elorus.
               </p>
+              <%!-- No field=, so that what is typed is never sent back to the page, and its
+                    name is top level, which is how the logs know to leave it out --%>
+              <.form
+                :if={@elorus_state == :locked}
+                for={to_form(%{})}
+                id="elorus-unlock-form"
+                phx-submit="unlock_elorus"
+                class="flex flex-wrap items-end gap-2"
+              >
+                <div class="min-w-48 flex-1">
+                  <.input
+                    type="password"
+                    name="password"
+                    id="elorus-unlock-password"
+                    label="Your password, to use Elorus"
+                    value=""
+                    autocomplete="current-password"
+                    required
+                  />
+                </div>
+                <.button
+                  id="unlock-elorus"
+                  type="submit"
+                  class="btn btn-sm btn-primary mb-2"
+                  disabled={@elorus_unlocking?}
+                  phx-disable-with="Unlocking..."
+                >
+                  <.icon name="hero-lock-open" class="size-4" /> Unlock
+                </.button>
+              </.form>
               <p
                 :if={@elorus_error}
                 id="elorus-error"

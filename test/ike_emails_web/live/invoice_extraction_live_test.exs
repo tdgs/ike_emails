@@ -158,6 +158,52 @@ defmodule IkeEmailsWeb.InvoiceExtractionLiveTest do
         assert render(view) =~ "busy"
       end
 
+      test "tells the model who the business of the user is, and never another's", %{
+        view: view,
+        scope: scope
+      } do
+        settings_fixture(
+          scope,
+          %{"business_name" => "My Own Ltd", "business_vat" => "EL111111111"},
+          token: nil
+        )
+
+        settings_fixture(
+          user_scope_fixture(),
+          %{"business_name" => "Other Corp", "business_vat" => "EL222222222"},
+          token: nil
+        )
+
+        InvoiceExtractorStub.stub({:ok, found()})
+
+        upload_pdf(view, "gh.pdf", pdf_fixture())
+        extract(view)
+        wait_for(view, "#invoice_issuer_name[value='GitHub, Inc.']")
+
+        assert_received {:extract_request, _pdf, prompt, _fields, _model}
+        assert prompt =~ "My Own Ltd, VAT number EL111111111"
+        refute prompt =~ "Other Corp"
+        refute prompt =~ "EL222222222"
+      end
+
+      test "does not name a business when the user has not set theirs", %{
+        view: view,
+        scope: scope
+      } do
+        settings_fixture(user_scope_fixture(), %{"business_name" => "Other Corp"}, token: nil)
+        assert IkeEmails.Settings.business(scope) == nil
+
+        InvoiceExtractorStub.stub({:ok, found()})
+
+        upload_pdf(view, "gh.pdf", pdf_fixture())
+        extract(view)
+        wait_for(view, "#invoice_issuer_name[value='GitHub, Inc.']")
+
+        assert_received {:extract_request, _pdf, prompt, _fields, _model}
+        refute prompt =~ "The business that keeps these invoices"
+        refute prompt =~ "Other Corp"
+      end
+
       test "forgets the result when the upload is cancelled meanwhile", %{view: view} do
         InvoiceExtractorStub.hold({:ok, found()})
 

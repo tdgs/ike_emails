@@ -6,7 +6,7 @@ defmodule IkeEmailsWeb.AuthLiveTest do
 
   describe "without a user" do
     test "the pages are not shown, the login is", %{conn: conn} do
-      for path <- [~p"/", ~p"/invoices", ~p"/invoices/new"] do
+      for path <- [~p"/", ~p"/invoices", ~p"/invoices/new", ~p"/settings"] do
         assert {:error, {:redirect, %{to: "/login"}}} = live(conn, path)
       end
     end
@@ -44,6 +44,7 @@ defmodule IkeEmailsWeb.AuthLiveTest do
       assert LazyHTML.query(document, "#login-form") |> Enum.count() == 1
       assert LazyHTML.query(document, "#nav-reconciliation") |> Enum.count() == 0
       assert LazyHTML.query(document, "#nav-invoices") |> Enum.count() == 0
+      assert LazyHTML.query(document, "#nav-settings") |> Enum.count() == 0
       assert LazyHTML.query(document, "#logout") |> Enum.count() == 0
     end
   end
@@ -58,6 +59,7 @@ defmodule IkeEmailsWeb.AuthLiveTest do
       assert has_element?(view, "#logout[href='/logout']")
       assert has_element?(view, "#nav-reconciliation")
       assert has_element?(view, "#nav-invoices")
+      assert has_element?(view, "#nav-settings")
     end
 
     test "the reconciliation shows their transactions only", %{conn: conn, scope: scope} do

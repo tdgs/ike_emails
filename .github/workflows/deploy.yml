@@ -35,12 +35,11 @@ jobs:
     env:
       KAMAL_VERSION_GEM: "2.12.0"
       SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+      SETTINGS_ENCRYPTION_KEY: ${{ secrets.SETTINGS_ENCRYPTION_KEY }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       BANK_API_TOKEN: ${{ secrets.BANK_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      ELORUS_ORGANIZATION_ID: ${{ secrets.ELORUS_ORGANIZATION_ID }}
-      ELORUS_API_TOKEN: ${{ secrets.ELORUS_API_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       # .kamal/secrets gets the registry password from `gh auth token`, which prints
@@ -59,9 +58,9 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
         run: |
           missing=0
-          for name in DEPLOY_SSH_KEY SSH_KNOWN_HOSTS SECRET_KEY_BASE POSTGRES_PASSWORD \
-            BANK_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ELORUS_ORGANIZATION_ID \
-            ELORUS_API_TOKEN ANTHROPIC_API_KEY SENTRY_DSN; do
+          for name in DEPLOY_SSH_KEY SSH_KNOWN_HOSTS SECRET_KEY_BASE SETTINGS_ENCRYPTION_KEY \
+            POSTGRES_PASSWORD BANK_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+            ANTHROPIC_API_KEY SENTRY_DSN; do
             if [ -z "${!name}" ]; then
               echo "::error::$name is not set in the production environment"
               missing=1

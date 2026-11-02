@@ -3,14 +3,19 @@ defmodule IkeEmails.Elorus do
   Client for the [Elorus API](https://developer.elorus.com) (v1.2), where the
   invoices for income are issued.
 
-  Every call needs the API key of an Elorus user and the id of the organization
-  to work on, from the environment (`config/runtime.exs`). Without them the
-  calls return `{:error, :not_configured}`, and `configured?/0` tells the UI not
-  to offer the integration.
+  The client keeps nothing: every call takes the `IkeEmails.Elorus.Credentials`
+  first, the API key of an Elorus user and the id of the organization to work on.
+  They belong to a user, who keeps them in their settings (see `IkeEmails.Settings`),
+  and they are not handed around: `IkeEmails.Elorus.Connection` holds those of a
+  user who unlocked them, and makes the calls. Only the address of the API and the
+  options of the HTTP client are in the configuration of the application. Without
+  an API key or an organization the calls return `{:error, :not_configured}`.
 
   Results are `{:ok, value}` or `{:error, reason}`, where the reason is one of:
 
     * `:not_configured` - no API key or organization id
+    * `:invalid_credentials` - the API key cannot be sent, as it has a character
+      that is not allowed in a header
     * `:invalid_id` - the invoice id is not made of letters, digits, `-` and `_`
     * `:unauthorized` - the API key was refused
     * `:forbidden` - the user may not do that in the organization
@@ -35,6 +40,7 @@ defmodule IkeEmails.Elorus do
 
   require Logger
 
+  alias IkeEmails.Elorus.Credentials
   alias IkeEmails.Elorus.Invoice
   alias IkeEmails.Tracing
 
@@ -46,6 +52,7 @@ defmodule IkeEmails.Elorus do
 
   @type error ::
           :not_configured
+          | :invalid_credentials
           | :invalid_id
           | :unauthorized
           | :forbidden
@@ -59,10 +66,8 @@ defmodule IkeEmails.Elorus do
   @doc """
   Whether the API key and the organization id are set.
   """
-  def configured?, do: configured?(config())
-
-  defp configured?(config) do
-    present?(config[:api_token]) and present?(config[:organization_id])
+  def configured?(%Credentials{} = credentials) do
+    present?(credentials.api_token) and present?(credentials.organization_id)
   end
 
   @doc """
@@ -83,12 +88,12 @@ defmodule IkeEmails.Elorus do
   See https://developer.elorus.com/en/#operation/invoices_list for all of them.
 
   Returns `%{count: total, invoices: [...], more?: another page follows}`. The
-  list does not carry everything of an invoice; `get_invoice/1` does.
+  list does not carry everything of an invoice; `get_invoice/2` does.
   """
-  def list_invoices(params \\ []) do
+  def list_invoices(%Credentials{} = credentials, params \\ []) do
     params = params |> Keyword.put_new(:ordering, @default_ordering) |> query_params()
 
-    with {:ok, body} <- get("/v1.2/invoices/", params: params) do
+    with {:ok, body} <- get(credentials, "/v1.2/invoices/", params: params) do
       invoices_page(body)
     end
   end
@@ -119,35 +124,37 @@ defmodule IkeEmails.Elorus do
 
   @doc """
   All the invoices that match `params`, which take the same filters as
-  `list_invoices/1`, read page by page.
+  `list_invoices/2`, read page by page.
 
   Takes at most `:max_pages` pages (20 by default) of 250 invoices, one request
   each. When there are more, it returns `{:error, :too_many_pages}` and not a
   partial list: narrow the query down, with a period for example.
   """
-  def list_all_invoices(params \\ [], opts \\ []) do
+  def list_all_invoices(%Credentials{} = credentials, params \\ [], opts \\ []) do
     max_pages = Keyword.get(opts, :max_pages, 20)
     params = Keyword.put_new(params, :page_size, @max_page_size)
 
-    read_pages = fn -> collect_pages(Keyword.delete(params, :page), 1, max_pages, []) end
+    read_pages = fn ->
+      collect_pages(credentials, Keyword.delete(params, :page), 1, max_pages, [])
+    end
 
-    # The requests of the pages are the spans inside this one. Without a
-    # configuration there are no requests, and no span either
-    if configured?() do
+    # The requests of the pages are the spans inside this one. Without
+    # credentials there are no requests, and no span either
+    if configured?(credentials) do
       Tracing.span("elorus list_all_invoices", %{}, read_pages)
     else
       read_pages.()
     end
   end
 
-  defp collect_pages(_params, page, max_pages, _acc) when page > max_pages do
+  defp collect_pages(_credentials, _params, page, max_pages, _acc) when page > max_pages do
     {:error, :too_many_pages}
   end
 
-  defp collect_pages(params, page, max_pages, acc) do
-    case list_invoices(Keyword.put(params, :page, page)) do
+  defp collect_pages(credentials, params, page, max_pages, acc) do
+    case list_invoices(credentials, Keyword.put(params, :page, page)) do
       {:ok, %{invoices: invoices, more?: true}} ->
-        collect_pages(params, page + 1, max_pages, [invoices | acc])
+        collect_pages(credentials, params, page + 1, max_pages, [invoices | acc])
 
       {:ok, %{invoices: invoices, more?: false}} ->
         {:ok, [invoices | acc] |> Enum.reverse() |> Enum.concat()}
@@ -160,9 +167,9 @@ defmodule IkeEmails.Elorus do
   @doc """
   A single invoice, with all of its details in `:raw`.
   """
-  def get_invoice(id) when is_binary(id) do
+  def get_invoice(%Credentials{} = credentials, id) when is_binary(id) do
     with :ok <- validate_id(id),
-         {:ok, body} <- get("/v1.2/invoices/:id/", path_params: [id: id]) do
+         {:ok, body} <- get(credentials, "/v1.2/invoices/:id/", path_params: [id: id]) do
       if is_map(body), do: {:ok, Invoice.from_api(body)}, else: {:error, :invalid_response}
     end
   end
@@ -170,9 +177,9 @@ defmodule IkeEmails.Elorus do
   @doc """
   The PDF of an invoice, as a binary.
   """
-  def invoice_pdf(id) when is_binary(id) do
+  def invoice_pdf(%Credentials{} = credentials, id) when is_binary(id) do
     with :ok <- validate_id(id),
-         {:ok, body} <- get("/v1.2/invoices/:id/pdf/", path_params: [id: id]) do
+         {:ok, body} <- get(credentials, "/v1.2/invoices/:id/pdf/", path_params: [id: id]) do
       if is_binary(body) and String.starts_with?(body, "%PDF-"),
         do: {:ok, body},
         else: {:error, :invalid_response}
@@ -184,14 +191,12 @@ defmodule IkeEmails.Elorus do
     if String.match?(id, ~r/\A[A-Za-z0-9_-]+\z/), do: :ok, else: {:error, :invalid_id}
   end
 
-  defp get(url, opts) do
-    config = config()
-
-    if configured?(config) do
+  defp get(credentials, url, opts) do
+    if configured?(credentials) do
       # One span for the call, with the retries in it. The path in it is `url`, the
       # template, because the resolved one holds the id of an invoice
-      Tracing.span("elorus GET #{url}", request_attributes(config, url), :client, fn ->
-        result = config |> new_request() |> Req.request([method: :get, url: url] ++ opts)
+      Tracing.span("elorus GET #{url}", request_attributes(url), :client, fn ->
+        result = credentials |> new_request() |> Req.request([method: :get, url: url] ++ opts)
 
         Tracing.set_attributes(response_attributes(result))
         handle_response(result)
@@ -201,12 +206,15 @@ defmodule IkeEmails.Elorus do
     end
   end
 
-  # What is sent in a span, and nothing else: see IkeEmails.Tracing
-  defp request_attributes(config, url) do
+  # What is sent in a span, and nothing else: see IkeEmails.Tracing. The
+  # credentials are not here
+  defp request_attributes(url) do
+    base_url = app_config()[:base_url]
+
     %{
       "http.request.method" => "GET",
       "url.path" => url,
-      "server.address" => config[:base_url] && URI.parse(config[:base_url]).host
+      "server.address" => base_url && URI.parse(base_url).host
     }
   end
 
@@ -216,13 +224,16 @@ defmodule IkeEmails.Elorus do
   defp response_attributes({:error, %module{}}), do: %{"error.type" => inspect(module)}
   defp response_attributes({:error, _other}), do: %{"error.type" => "unknown"}
 
-  defp new_request(config) do
+  # The address of the API is never a setting of a user
+  defp new_request(%Credentials{} = credentials) do
+    config = app_config()
+
     headers =
       [
-        authorization: "Token #{config[:api_token]}",
-        x_elorus_organization: config[:organization_id]
+        authorization: "Token #{credentials.api_token}",
+        x_elorus_organization: credentials.organization_id
       ]
-      |> then(&if(config[:demo], do: [{:x_elorus_demo, "true"} | &1], else: &1))
+      |> then(&if(credentials.demo, do: [{:x_elorus_demo, "true"} | &1], else: &1))
 
     [
       base_url: config[:base_url],
@@ -257,11 +268,17 @@ defmodule IkeEmails.Elorus do
   defp log_error({request, exception}) do
     Logger.debug(fn ->
       "Elorus #{method(request)} #{request.url.path} failed: " <>
-        "#{Exception.message(exception)} #{elapsed(request)}"
+        "#{error_message(exception)} #{elapsed(request)}"
     end)
 
     {request, exception}
   end
+
+  # Mint puts the value of an invalid header in its message, and that is the API key
+  defp error_message(%Req.HTTPError{reason: {:invalid_header_value, name, _value}}),
+    do: "invalid value for header #{name}"
+
+  defp error_message(exception), do: Exception.message(exception)
 
   defp method(request), do: request.method |> to_string() |> String.upcase()
 
@@ -290,6 +307,10 @@ defmodule IkeEmails.Elorus do
   defp handle_response({:ok, %Req.Response{status: status, body: body}}) do
     {:error, {:unexpected_status, status, body}}
   end
+
+  # Not returned as it is: the message of the exception has the API key
+  defp handle_response({:error, %Req.HTTPError{reason: {:invalid_header_value, _, _}}}),
+    do: {:error, :invalid_credentials}
 
   defp handle_response({:error, exception}), do: {:error, exception}
 
@@ -320,5 +341,5 @@ defmodule IkeEmails.Elorus do
 
   defp present?(value), do: is_binary(value) and value != ""
 
-  defp config, do: Application.fetch_env!(:ike_emails, __MODULE__)
+  defp app_config, do: Application.fetch_env!(:ike_emails, __MODULE__)
 end

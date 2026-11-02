@@ -36,7 +36,9 @@ defmodule IkeEmails.InvoiceExtractor do
   `issuer_vat`, `number`, `receiver_name` and `receiver_vat`.
 
   `:hints` are what is already known, from the bank transaction: a map of
-  `:amount_input`, `:currency` and `:date`.
+  `:amount_input`, `:currency` and `:date`. `:business` is who the user is, as
+  `IkeEmails.Settings.business/1` gives it (`%{name: name, vat: vat}`, or `nil`),
+  so that the model can tell an invoice that the business issued from one it got.
 
   Returns `{:ok, params}`, or `{:error, reason}`: `:not_configured`,
   `:missing_key`, `:unauthorized`, `:rate_limited`, `:timeout`,
@@ -46,7 +48,7 @@ defmodule IkeEmails.InvoiceExtractor do
     config = config()
 
     if configured?() do
-      prompt = prompt(Keyword.get(opts, :hints, %{}))
+      prompt = prompt(Keyword.get(opts, :hints, %{}), Keyword.get(opts, :business))
 
       with {:ok, found} <- config[:client].generate(pdf, prompt, @fields, config[:model]) do
         {:ok, params(found)}
@@ -57,11 +59,11 @@ defmodule IkeEmails.InvoiceExtractor do
   end
 
   @doc false
-  def prompt(hints) do
+  def prompt(hints, business) do
     """
     This is an invoice. Read these facts off it: #{field_names()}.
 
-    #{business()}
+    #{business(business)}
 
     Answer null for a fact that the invoice does not show. Do not guess.#{hints(hints)}
     """
@@ -70,21 +72,17 @@ defmodule IkeEmails.InvoiceExtractor do
 
   defp field_names, do: Enum.map_join(@fields, ", ", fn {name, _} -> to_string(name) end)
 
-  defp business do
-    settings = Application.get_env(:ike_emails, :business, [])
+  defp business(%{name: name} = business) when is_binary(name) and name != "" do
+    vat = if present?(business[:vat]), do: ", VAT number #{business.vat}", else: ""
 
-    case {settings[:name], settings[:vat]} do
-      {name, vat} when is_binary(name) and name != "" ->
-        vat = if present?(vat), do: ", VAT number #{vat}", else: ""
+    "The business that keeps these invoices is #{name}#{vat}. When it is the issuer, " <>
+      "the invoice is one it issued to a customer, so read the customer as the " <>
+      "receiver. Otherwise leave the receiver null."
+  end
 
-        "The business that keeps these invoices is #{name}#{vat}. When it is the issuer, " <>
-          "the invoice is one it issued to a customer, so read the customer as the " <>
-          "receiver. Otherwise leave the receiver null."
-
-      _ ->
-        "Leave the receiver null unless the invoice was clearly issued to a customer " <>
-          "by the business that keeps it."
-    end
+  defp business(_none) do
+    "Leave the receiver null unless the invoice was clearly issued to a customer " <>
+      "by the business that keeps it."
   end
 
   defp hints(hints) do

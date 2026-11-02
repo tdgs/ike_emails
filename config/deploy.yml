@@ -46,6 +46,9 @@ env:
   clear:
     PHX_HOST: app.example.com
     POOL_SIZE: "10"
+    # The Elorus API keys that are unlocked are in the memory of the server, and
+    # a crash dump of the VM would hold them: it is not written
+    ERL_CRASH_DUMP_BYTES: "0"
     # The invoice PDFs are in a Cloudflare R2 bucket, which takes the region "auto"
     S3_BUCKET: ike-email-pdfs
     AWS_REGION: auto
@@ -54,19 +57,18 @@ env:
     AWS_ENDPOINT_URL_S3: https://b3558df98013686d5554e48c46b5721e.eu.r2.cloudflarestorage.com
     #
     # Optional integrations, see config/runtime.exs. The secret ones also need
-    # to be listed under secret below and defined in .kamal/secrets.
+    # to be listed under secret below and defined in .kamal/secrets. The business
+    # and the Elorus account are those of each user, set in the app at /settings.
     AI_MODEL: anthropic:claude-sonnet-5-5
-    BUSINESS_NAME: Example Business IKE
-    BUSINESS_VAT: "EL000000000"
   secret:
     - SECRET_KEY_BASE
+    # Seals the Elorus API keys of the users, which are in the database. Without it
+    # the container does not start, and a new one makes them enter their keys again
+    - SETTINGS_ENCRYPTION_KEY
     - DATABASE_URL
     - BANK_API_TOKEN
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
-    # The organization id is no secret, it is kept with the token
-    - ELORUS_ORGANIZATION_ID
-    - ELORUS_API_TOKEN
     - ANTHROPIC_API_KEY
     # Where the errors are reported to, off without it
     - SENTRY_DSN

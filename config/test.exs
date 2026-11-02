@@ -6,19 +6,20 @@ config :bcrypt_elixir, log_rounds: 1
 # Invoice PDFs are kept in memory, see test/support/storage_in_memory.ex
 config :ike_emails, IkeEmails.Storage, adapter: IkeEmails.Storage.InMemory
 
-# Elorus requests are answered by Req.Test stubs, see test/ike_emails/elorus_test.exs
+# Elorus requests are answered by Req.Test stubs, see test/ike_emails/elorus_test.exs.
+# The API key and the organization are those of a user, see IkeEmails.Fixtures
 config :ike_emails, IkeEmails.Elorus,
-  api_token: "test-elorus-token",
-  organization_id: "1000000243015421",
-  demo: false,
   req_options: [plug: {Req.Test, IkeEmails.Elorus}, retry_delay: 1]
+
+# Sealing a key takes the least work, and the server key is not a secret
+config :ike_emails, IkeEmails.Settings.SealedToken,
+  keys: [{"1", Base.decode64!("1rQ9SbonkzPiLm37lnbmEk4HkTvrLd/73bYsXviJONQ=")}],
+  iterations: 1_000
 
 # Invoices are read by a stub, see test/support/invoice_extractor_stub.ex
 config :ike_emails, IkeEmails.InvoiceExtractor,
   client: IkeEmails.InvoiceExtractorStub,
   model: "test:model"
-
-config :ike_emails, :business, name: "Test Business", vat: "EL099999999"
 
 # Configure your database
 #

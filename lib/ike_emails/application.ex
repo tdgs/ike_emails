@@ -16,6 +16,12 @@ defmodule IkeEmails.Application do
       {Phoenix.PubSub, name: IkeEmails.PubSub},
       # Runs the slow calls (to Elorus) away from the LiveViews that wait for them
       {Task.Supervisor, name: IkeEmails.TaskSupervisor},
+      # The processes that hold the Elorus credentials of the users who unlocked
+      # them, found by the id of the user: see IkeEmails.Elorus.Connection. The
+      # locks are counted by a process that is started before them
+      IkeEmails.Elorus.Locks,
+      {Registry, keys: :unique, name: IkeEmails.Elorus.Registry},
+      {DynamicSupervisor, name: IkeEmails.Elorus.ConnectionSupervisor, strategy: :one_for_one},
       # Start a worker by calling: IkeEmails.Worker.start_link(arg)
       # {IkeEmails.Worker, arg},
       # Start to serve requests, typically the last entry

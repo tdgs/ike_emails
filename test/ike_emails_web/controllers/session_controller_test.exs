@@ -3,6 +3,8 @@ defmodule IkeEmailsWeb.SessionControllerTest do
 
   import IkeEmails.Fixtures
 
+  alias IkeEmails.Elorus.Connection
+
   setup do
     %{user: user_fixture()}
   end
@@ -117,6 +119,24 @@ defmodule IkeEmailsWeb.SessionControllerTest do
       |> delete(~p"/logout")
 
       assert_receive %Phoenix.Socket.Broadcast{topic: ^live_socket_id, event: "disconnect"}
+    end
+
+    test "locks the Elorus credentials of the user, and of nobody else", %{
+      conn: conn,
+      user: user
+    } do
+      scope = user_scope_fixture(user)
+      other = user_scope_fixture()
+      :ok = Connection.put_credentials(scope, elorus_credentials_fixture())
+      :ok = Connection.put_credentials(other, elorus_credentials_fixture())
+      assert Connection.unlocked?(scope)
+
+      conn |> log_in_user(user) |> delete(~p"/logout")
+
+      refute Connection.unlocked?(scope)
+      assert Connection.unlocked?(other)
+
+      Connection.lock(other)
     end
 
     test "is fine for someone who is not logged in", %{conn: conn} do

@@ -92,3 +92,8 @@ config :ike_emails, IkeEmails.Storage.S3,
   endpoint_url: "http://127.0.0.1:8333",
   access_key_id: "ike-emails-dev",
   secret_access_key: "ike-emails-dev-secret"
+
+# The key that seals the Elorus API keys. This one is not a secret, production has its
+# own, see config/runtime.exs
+config :ike_emails, IkeEmails.Settings.SealedToken,
+  keys: [{"1", Base.decode64!("0XGNFVEaonKRZDg+rekRYnY59dWz0kjzjHHWARi+DNU=")}]

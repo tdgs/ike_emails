@@ -120,10 +120,13 @@ defmodule IkeEmails.Invoicing.Invoice do
     end
   end
 
-  # Spaces, dots and dashes are formatting: "EL 987u4š1" is "EL987u4š1"
-  defp normalize_vat(nil), do: nil
+  @doc """
+  A VAT number without its formatting: spaces, dots and dashes are left out, so
+  "el 987u4š1" is "EL987u4š1". Blank is `nil`.
+  """
+  def normalize_vat(nil), do: nil
 
-  defp normalize_vat(vat) do
+  def normalize_vat(vat) do
     case vat |> String.replace(~r/[\s.\-]/u, "") |> String.upcase() do
       "" -> nil
       normalized -> normalized
