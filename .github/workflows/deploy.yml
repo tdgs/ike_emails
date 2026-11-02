@@ -1,0 +1,95 @@
+name: Deploy
+
+# Every push to main runs the tests (ci.yml) and, when they pass, builds the image on
+# the runner, pushes it to ghcr.io and rolls it out with Kamal. It can also be started
+# by hand: gh workflow run deploy.yml
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Two deploys never run at once. A second one waits instead of cancelling the first,
+# which could be half way through a rollout.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Build and deploy
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Holds the secrets and the SSH_KNOWN_HOSTS variable, see "Deploying" in the README
+    environment: production
+
+    env:
+      KAMAL_VERSION_GEM: "2.12.0"
+      SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      BANK_API_TOKEN: ${{ secrets.BANK_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      ELORUS_ORGANIZATION_ID: ${{ secrets.ELORUS_ORGANIZATION_ID }}
+      ELORUS_API_TOKEN: ${{ secrets.ELORUS_API_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      # .kamal/secrets gets the registry password from `gh auth token`, which prints
+      # this token. It is the one that pushes to ghcr.io, so the package must give
+      # this repository write access.
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # An empty secret would not fail the deploy: Kamal would ship it as an empty
+      # variable and the new container would crash on boot.
+      - name: Check that the secrets are set
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
+        run: |
+          missing=0
+          for name in DEPLOY_SSH_KEY SSH_KNOWN_HOSTS SECRET_KEY_BASE POSTGRES_PASSWORD \
+            BANK_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ELORUS_ORGANIZATION_ID \
+            ELORUS_API_TOKEN ANTHROPIC_API_KEY SENTRY_DSN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not set in the production environment"
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+
+      - name: Install Kamal
+        run: gem install kamal -v "$KAMAL_VERSION_GEM"
+
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      # The image is built here, on a native amd64 runner, as there is no
+      # builder.remote without KAMAL_BUILD_ON_SERVER, see config/deploy.yml.
+      - name: Build and deploy
+        run: kamal deploy
+
+      - name: Check that the new version is up
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 https://app.example.com/up
