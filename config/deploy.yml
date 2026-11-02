@@ -32,9 +32,13 @@ ssh:
 
 builder:
   arch: amd64
+<% if ENV["KAMAL_BUILD_ON_SERVER"] %>
   # Build on the server itself. On an Apple Silicon Mac the amd64 build runs
-  # under emulation, where Erlang crashes on start.
+  # under emulation, where Erlang crashes on start. Set by `make deploy`. The
+  # GitHub Action does not set it: its runner is amd64 and builds the image itself.
   remote: ssh://deploy@91.250.248.6
+<% end %>
+
 
 deploy_timeout: 60
 

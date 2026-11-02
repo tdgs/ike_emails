@@ -84,7 +84,31 @@ In production, where there is no Mix, use the release (on Fly:
 There is no password reset yet. Do not delete a user to start over: their transactions
 and invoices go with them.
 
-Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
+## Deploying
+
+The app runs on one server, deployed with [Kamal](https://kamal-deploy.org)
+(`config/deploy.yml`). Every push to `main` runs the tests and, when they pass, the
+GitHub Action `.github/workflows/deploy.yml` builds the image on the runner, pushes it to
+`ghcr.io/tdgs/ike-emails` and rolls it out. Migrations run when the container starts, and
+if one fails the previous version keeps running. To deploy without a push:
+
+    gh workflow run deploy.yml --ref main
+
+`make deploy` deploys from this machine instead, building the image on the server. To go
+back to an older version, run `kamal rollback <version>` through
+`op run --environment p3mdfiiyqkk6lf75sahcxlv6l4 --`.
+
+The Action needs, once:
+
+* a `production` environment on the repository (only the `main` branch may use it), with
+  the secrets of `.kamal/secrets` and the secret `DEPLOY_SSH_KEY`, which `make sync-secrets`
+  copies from 1Password: the first from the Environment `ike-emails-prod`, the second from
+  the SSH Key item "ike-emails GitHub Actions deploy key" in the Employee vault, whose
+  public key is in `~/.ssh/authorized_keys` of `deploy` on the server. It also holds the
+  variable `SSH_KNOWN_HOSTS` (the output of `ssh-keyscan -t ed25519 <server>` without the
+  comment line, checked against the real host key);
+* write access of this repository to the package `ike-emails` (the package settings,
+  "Manage Actions access"), or the push to ghcr.io fails with a 403.
 
 ## API
 
