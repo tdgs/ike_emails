@@ -16,6 +16,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   alias IkeEmails.Invoicing
   alias IkeEmails.Money
   alias IkeEmails.Settings
+  alias IkeEmails.Statements
   alias IkeEmailsWeb.InvoiceUpload
 
   @impl true
@@ -91,6 +92,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
     socket
     |> assign(:month, month)
+    |> assign(:statement, Statements.get_statement(scope, month))
     |> assign(:months, Banking.months_with_transactions(scope))
     |> assign(:summary, Banking.month_summary(transactions))
     |> stream(:transactions, transactions, reset: true)
@@ -598,6 +600,21 @@ defmodule IkeEmailsWeb.ReconciliationLive do
       <.header>
         Reconciliation
         <:subtitle>Match every payment of the month to its invoice.</:subtitle>
+        <:actions>
+          <%= if @statement do %>
+            <.button id="download-month-report" href={~p"/reports/#{month_param(@month)}"}>
+              <.icon name="hero-arrow-down-tray" class="size-4" /> Month report
+            </.button>
+          <% else %>
+            <.button
+              id="download-month-report"
+              disabled
+              title="Upload the statement of this month first"
+            >
+              <.icon name="hero-arrow-down-tray" class="size-4" /> Month report
+            </.button>
+          <% end %>
+        </:actions>
       </.header>
 
       <div id="month-nav" class="flex items-center justify-between gap-3">

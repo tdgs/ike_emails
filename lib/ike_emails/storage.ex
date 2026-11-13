@@ -7,10 +7,17 @@ defmodule IkeEmails.Storage do
 
   @callback put(key :: String.t(), body :: binary(), content_type :: String.t()) ::
               :ok | {:error, term()}
+  @callback fetch(key :: String.t()) :: {:ok, binary()} | {:error, term()}
   @callback delete(key :: String.t()) :: :ok | {:error, term()}
   @callback presigned_url(key :: String.t(), expires_in :: pos_integer()) :: String.t()
 
   def put(key, body, content_type), do: adapter().put(key, body, content_type)
+
+  @doc """
+  The bytes of the object, for when the server needs them (a zip) and a link to
+  send the browser to is not enough.
+  """
+  def fetch(key), do: adapter().fetch(key)
 
   def delete(key), do: adapter().delete(key)
 

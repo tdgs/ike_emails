@@ -53,6 +53,7 @@ defmodule IkeEmailsWeb.Router do
 
     get "/invoices/:id/pdf", InvoicePdfController, :show
     get "/statements/:id/pdf", StatementPdfController, :show
+    get "/reports/:month", MonthReportController, :show
   end
 
   # The bank crawler logs in with the email and password of a user, and pushes

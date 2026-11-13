@@ -21,6 +21,14 @@ defmodule IkeEmails.Storage.InMemory do
   end
 
   @impl true
+  def fetch(key) do
+    case get(key) do
+      {body, _content_type} -> {:ok, body}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @impl true
   def delete(key) do
     :ets.delete(@table, key)
     :ok

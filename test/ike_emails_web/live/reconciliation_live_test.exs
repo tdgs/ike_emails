@@ -74,6 +74,27 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
     end
   end
 
+  describe "the month report" do
+    test "is downloaded from the month that has a statement", %{conn: conn, scope: scope} do
+      statement_fixture(scope, "2026-10")
+
+      {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
+
+      assert has_element?(view, "a#download-month-report[href='/reports/2026-10']")
+
+      view |> element("#next-month") |> render_click()
+      assert_patch(view, ~p"/?month=2026-11")
+      assert has_element?(view, "button#download-month-report[disabled]")
+    end
+
+    test "cannot be downloaded from a month without a statement", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
+
+      assert has_element?(view, "button#download-month-report[disabled]")
+      refute has_element?(view, "a#download-month-report")
+    end
+  end
+
   describe "the transactions" do
     test "show their status", %{conn: conn, scope: scope} do
       missing = transaction_fixture(scope, %{"amount" => "-90.00"})
