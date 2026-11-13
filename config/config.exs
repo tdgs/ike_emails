@@ -61,6 +61,9 @@ config :ike_emails, IkeEmails.InvoiceExtractor,
   client: IkeEmails.InvoiceExtractor.Client.ReqLLM,
   model: nil
 
+# The bank is reached with a browser that logs in to myAlpha, see IkeEmails.Bank.Driver
+config :ike_emails, IkeEmails.Bank, driver: IkeEmails.Bank.Driver.Chrome
+
 # Configures the mailer
 #
 # By default it uses the "Local" adapter which stores the emails
