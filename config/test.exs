@@ -21,6 +21,9 @@ config :ike_emails, IkeEmails.InvoiceExtractor,
   client: IkeEmails.InvoiceExtractorStub,
   model: "test:model"
 
+# The bank is answered by a scripted driver, see test/support/bank_driver_stub.ex
+config :ike_emails, IkeEmails.Bank, driver: IkeEmails.BankDriverStub
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
