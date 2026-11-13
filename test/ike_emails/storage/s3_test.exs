@@ -45,6 +45,17 @@ defmodule IkeEmails.Storage.S3Test do
     assert :ok = S3.delete(key)
   end
 
+  test "fetches the bytes of an object, and reports one that is missing" do
+    key = "invoices/test-#{System.unique_integer([:positive])}.pdf"
+    body = "%PDF-1.4 fetched from s3"
+
+    assert :ok = S3.put(key, body, "application/pdf")
+    assert {:ok, ^body} = S3.fetch(key)
+
+    assert :ok = S3.delete(key)
+    assert {:error, {:unexpected_status, 404, _body}} = S3.fetch(key)
+  end
+
   test "reports a refusal of the credentials" do
     Application.put_env(:ike_emails, S3, Keyword.put(@config, :secret_access_key, "wrong"))
 

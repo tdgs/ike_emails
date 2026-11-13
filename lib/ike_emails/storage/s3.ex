@@ -14,6 +14,15 @@ defmodule IkeEmails.Storage.S3 do
   end
 
   @impl true
+  def fetch(key) do
+    case Req.get(client(), url: object_url(key), decode_body: false) do
+      {:ok, %{status: status, body: body}} when status in 200..299 -> {:ok, body}
+      {:ok, %{status: status, body: body}} -> {:error, {:unexpected_status, status, body}}
+      {:error, exception} -> {:error, exception}
+    end
+  end
+
+  @impl true
   def delete(key) do
     client()
     |> Req.delete(url: object_url(key))

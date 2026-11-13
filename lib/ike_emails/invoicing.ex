@@ -35,6 +35,21 @@ defmodule IkeEmails.Invoicing do
     |> Repo.all()
   end
 
+  @doc """
+  The invoices of the user dated in the month (a date in it), oldest first.
+  """
+  def list_invoices_for_month(%Scope{} = scope, %Date{} = month) do
+    first = Date.beginning_of_month(month)
+    last = Date.end_of_month(month)
+
+    Repo.all(
+      from i in Invoice,
+        where: i.user_id == ^Scope.user_id(scope),
+        where: i.date >= ^first and i.date <= ^last,
+        order_by: [asc: i.date, asc: i.id]
+    )
+  end
+
   defp search(query, term) when is_binary(term) do
     case String.trim(term) do
       "" ->
