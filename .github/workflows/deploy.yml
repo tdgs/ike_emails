@@ -29,11 +29,16 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Holds the secrets and the SSH_KNOWN_HOSTS variable, see "Deploying" in the README
+    # Holds the secrets (DEPLOY_HOST and APP_HOST too) and the SSH_KNOWN_HOSTS
+    # variable, see "Deploying" in the README
     environment: production
 
     env:
       KAMAL_VERSION_GEM: "2.12.0"
+      # The server and the domain, which config/deploy.yml reads. They are secrets,
+      # not variables, so that GitHub masks them in the logs of the run.
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      APP_HOST: ${{ secrets.APP_HOST }}
       SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
       SETTINGS_ENCRYPTION_KEY: ${{ secrets.SETTINGS_ENCRYPTION_KEY }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
@@ -58,9 +63,9 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ vars.SSH_KNOWN_HOSTS }}
         run: |
           missing=0
-          for name in DEPLOY_SSH_KEY SSH_KNOWN_HOSTS SECRET_KEY_BASE SETTINGS_ENCRYPTION_KEY \
-            POSTGRES_PASSWORD BANK_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
-            ANTHROPIC_API_KEY SENTRY_DSN; do
+          for name in DEPLOY_HOST APP_HOST DEPLOY_SSH_KEY SSH_KNOWN_HOSTS SECRET_KEY_BASE \
+            SETTINGS_ENCRYPTION_KEY POSTGRES_PASSWORD BANK_API_TOKEN AWS_ACCESS_KEY_ID \
+            AWS_SECRET_ACCESS_KEY ANTHROPIC_API_KEY SENTRY_DSN; do
             if [ -z "${!name}" ]; then
               echo "::error::$name is not set in the production environment"
               missing=1
@@ -91,4 +96,4 @@ jobs:
         run: kamal deploy
 
       - name: Check that the new version is up
-        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 https://app.example.com/up
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 5 "https://$APP_HOST/up"

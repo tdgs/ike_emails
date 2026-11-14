@@ -1,20 +1,22 @@
 # Deployed with Kamal (https://kamal-deploy.org) to a single VPS: the app and its
 # Postgres run there as containers. Secrets are not in this file, see
-# .kamal/secrets.
+# .kamal/secrets. Neither are the server and the domain: DEPLOY_HOST (the address
+# of the server) and APP_HOST (the domain of the app) come from the environment,
+# see "Deploying" in the README.
 service: ike-emails
 image: tdgs/ike-emails
 
 servers:
   web:
     hosts:
-      - 203.0.113.10
+      - <%= ENV.fetch("DEPLOY_HOST") %>
     # Migrations run on every start. If one fails the container exits, the
     # health check fails and Kamal keeps the previous version running.
     cmd: sh -c "bin/migrate && exec bin/server"
 
 proxy:
   ssl: true
-  host: app.example.com
+  host: <%= ENV.fetch("APP_HOST") %>
   app_port: 4000
   healthcheck:
     path: /up
@@ -36,7 +38,7 @@ builder:
   # Build on the server itself. On an Apple Silicon Mac the amd64 build runs
   # under emulation, where Erlang crashes on start. Set by `make deploy`. The
   # GitHub Action does not set it: its runner is amd64 and builds the image itself.
-  remote: ssh://deploy@203.0.113.10
+  remote: ssh://deploy@<%= ENV.fetch("DEPLOY_HOST") %>
 <% end %>
 
 
@@ -44,7 +46,7 @@ deploy_timeout: 60
 
 env:
   clear:
-    PHX_HOST: app.example.com
+    PHX_HOST: <%= ENV.fetch("APP_HOST") %>
     POOL_SIZE: "10"
     # The Elorus API keys that are unlocked are in the memory of the server, and
     # a crash dump of the VM would hold them: it is not written
@@ -78,7 +80,7 @@ accessories:
   # of Kamal. See deploy/backup/setup.sh.
   db:
     image: postgres:17
-    host: 203.0.113.10
+    host: <%= ENV.fetch("DEPLOY_HOST") %>
     # Only reachable from the server itself, not from the internet. Docker
     # publishes ports around ufw, so the 127.0.0.1 here is what keeps it closed.
     port: "127.0.0.1:5432:5432"

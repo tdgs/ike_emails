@@ -68,14 +68,14 @@ defmodule IkeEmails.SettingsTest do
       assert {:ok, settings} =
                Settings.update_settings(scope, %{
                  "business_name" => "Acme",
-                 "business_vat" => "EL 987u4š1",
+                 "business_vat" => "EL 987.654-321",
                  "elorus_organization_id" => "100-abc_DEF",
                  "elorus_demo" => "true"
                })
 
       assert %{
                business_name: "Acme",
-               business_vat: "EL987u4š1",
+               business_vat: "EL987654321",
                elorus_organization_id: "100-abc_DEF",
                elorus_demo: true,
                user_id: user_id
