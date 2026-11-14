@@ -143,8 +143,9 @@ The Action needs, once:
 * a `production` environment on the repository (only the `main` branch may use it), with
   the secrets of `.kamal/secrets`, the secrets `DEPLOY_HOST` and `APP_HOST`, and the
   secret `DEPLOY_SSH_KEY`, which `make sync-secrets` copies from 1Password: all but the
-  last from the Environment `ike-emails-prod`, `DEPLOY_SSH_KEY` from the SSH Key item "ike-emails GitHub Actions deploy key" in the Employee vault, whose
-  public key is in `~/.ssh/authorized_keys` of `deploy` on the server. It also holds the
+  last from the Environment `ike-emails-prod`, `DEPLOY_SSH_KEY` from the SSH Key item
+  "ike-emails GitHub Actions deploy key" in the Employee vault, whose public key is in
+  `~/.ssh/authorized_keys` of `deploy` on the server. It also holds the
   variable `SSH_KNOWN_HOSTS` (the output of `ssh-keyscan -t ed25519 <server>` without the
   comment line, checked against the real host key);
 * write access of this repository to the package `ike-emails` (the package settings,
