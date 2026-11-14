@@ -5,8 +5,9 @@
 # values below. It asks for the sudo password of the deploy user once, to
 # install the packages and the systemd timer.
 #
-#     op run --environment <1password-environment-id> -- deploy/backup/setup.sh
+#     op run --environment "$OP_ENVIRONMENT" -- deploy/backup/setup.sh
 #
+#   DEPLOY_HOST                  address of the server, as in config/deploy.yml
 #   BACKUP_R2_ACCESS_KEY_ID      R2 API token limited to the backup bucket,
 #   BACKUP_R2_SECRET_ACCESS_KEY  with Object Read & Write
 #   BACKUP_AGE_RECIPIENT         public key (age1...) of the key pair made with
@@ -14,7 +15,7 @@
 #   BACKUP_PING_URL              optional, see backup.sh
 set -euo pipefail
 
-host=deploy@203.0.113.10
+host=deploy@${DEPLOY_HOST:?DEPLOY_HOST is not set: the address of the server, see Deploying in the README}
 bucket=ike-email-backups
 endpoint=https://b3558df98013686d5554e48c46b5721e.eu.r2.cloudflarestorage.com
 

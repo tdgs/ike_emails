@@ -122,15 +122,30 @@ if one fails the previous version keeps running. To deploy without a push:
 
 `make deploy` deploys from this machine instead, building the image on the server. To go
 back to an older version, run `kamal rollback <version>` through
-`op run --environment <1password-environment-id> --`.
+`op run --environment "$OP_ENVIRONMENT" --`.
+
+The server, the domain and the 1Password Environment are not in the repository. They come
+from these environment variables:
+
+| Variable | What it is | Where it is set |
+| --- | --- | --- |
+| `DEPLOY_HOST` | Address (IP or name) of the server, which `config/deploy.yml` deploys to over SSH as `deploy`, and where the db accessory runs | The 1Password Environment `ike-emails-prod`, and the secret `DEPLOY_HOST` of the `production` environment on GitHub |
+| `APP_HOST` | Domain of the app, without `https://`: the host of kamal-proxy (and its TLS certificate), `PHX_HOST`, and the health check after a deploy | The 1Password Environment `ike-emails-prod`, and the secret `APP_HOST` of the `production` environment on GitHub |
+| `OP_ENVIRONMENT` | ID of the 1Password Environment `ike-emails-prod`, for `op run --environment "$OP_ENVIRONMENT" --`, `make deploy` and `make sync-secrets` | Your shell, e.g. `export OP_ENVIRONMENT=<1password-environment-id>` |
+
+`config/deploy.yml` reads `DEPLOY_HOST` and `APP_HOST` with `ENV.fetch`, so every `kamal`
+command fails with a `KeyError` when one is missing: run Kamal through `op run`.
+`deploy/backup/setup.sh` needs `DEPLOY_HOST` too. On GitHub they are secrets rather than
+variables, so that they are masked in the logs of the Action.
 
 The Action needs, once:
 
 * a `production` environment on the repository (only the `main` branch may use it), with
-  the secrets of `.kamal/secrets` and the secret `DEPLOY_SSH_KEY`, which `make sync-secrets`
-  copies from 1Password: the first from the Environment `ike-emails-prod`, the second from
-  the SSH Key item "ike-emails GitHub Actions deploy key" in the Employee vault, whose
-  public key is in `~/.ssh/authorized_keys` of `deploy` on the server. It also holds the
+  the secrets of `.kamal/secrets`, the secrets `DEPLOY_HOST` and `APP_HOST`, and the
+  secret `DEPLOY_SSH_KEY`, which `make sync-secrets` copies from 1Password: all but the
+  last from the Environment `ike-emails-prod`, `DEPLOY_SSH_KEY` from the SSH Key item
+  "ike-emails GitHub Actions deploy key" in the Employee vault, whose public key is in
+  `~/.ssh/authorized_keys` of `deploy` on the server. It also holds the
   variable `SSH_KNOWN_HOSTS` (the output of `ssh-keyscan -t ed25519 <server>` without the
   comment line, checked against the real host key);
 * write access of this repository to the package `ike-emails` (the package settings,

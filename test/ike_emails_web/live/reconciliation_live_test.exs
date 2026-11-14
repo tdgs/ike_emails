@@ -285,7 +285,7 @@ defmodule IkeEmailsWeb.ReconciliationLiveTest do
 
       view
       |> form("#invoice-form",
-        invoice: %{issuer_name: "Elorus", issuer_vat: "EL987u4š1", number: "42"}
+        invoice: %{issuer_name: "Elorus", issuer_vat: "EL987654321", number: "42"}
       )
       |> render_submit()
 
