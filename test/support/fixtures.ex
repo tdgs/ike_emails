@@ -67,7 +67,7 @@ defmodule IkeEmails.Fixtures do
         "currency" => "EUR",
         "date" => "2026-10-09",
         "issuer_name" => "Elorus",
-        "issuer_vat" => "EL 094.019.245",
+        "issuer_vat" => "EL 987.654.321",
         "number" => "2026-0042"
       },
       stringify(attrs)

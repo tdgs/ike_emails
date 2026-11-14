@@ -122,7 +122,7 @@ defmodule IkeEmails.Invoicing.Invoice do
 
   @doc """
   A VAT number without its formatting: spaces, dots and dashes are left out, so
-  "el 094 019.245" is "EL094019245". Blank is `nil`.
+  "el 987 654.321" is "EL987654321". Blank is `nil`.
   """
   def normalize_vat(nil), do: nil
 

@@ -19,7 +19,7 @@ defmodule IkeEmails.InvoicingTest do
       assert invoice.amount_cents == 19_344
       assert invoice.currency == "EUR"
       assert invoice.date == ~D[2026-10-09]
-      assert invoice.issuer_vat == "EL094019245"
+      assert invoice.issuer_vat == "EL987654321"
       assert invoice.file_name == "elorus.pdf"
       assert invoice.file_size == byte_size(pdf)
       assert invoice.file_key == "invoices/#{scope.user.id}/#{invoice.file_sha256}.pdf"
