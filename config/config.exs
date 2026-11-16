@@ -62,6 +62,10 @@ config :ike_emails, IkeEmails.InvoiceExtractor,
   client: IkeEmails.InvoiceExtractor.Client.ReqLLM,
   model: nil
 
+# Proposing matches for the transactions of a month is optional too, and uses the
+# same model, see IkeEmails.MonthClose
+config :ike_emails, IkeEmails.MonthClose, model: nil
+
 # The bank is reached with a browser that logs in to myAlpha, see IkeEmails.Bank.Driver
 config :ike_emails, IkeEmails.Bank, driver: IkeEmails.Bank.Driver.Chrome
 

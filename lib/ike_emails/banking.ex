@@ -7,6 +7,7 @@ defmodule IkeEmails.Banking do
 
   alias IkeEmails.Accounts.Scope
   alias IkeEmails.Banking.Transaction
+  alias IkeEmails.MonthClose.Proposal
   alias IkeEmails.Repo
 
   # The bank books a transfer and its fee under one transaction id, so a
@@ -36,7 +37,8 @@ defmodule IkeEmails.Banking do
   end
 
   @doc """
-  The transactions of the user booked in a month, oldest first, with their invoices.
+  The transactions of the user booked in a month, oldest first, with their invoices
+  and what the month-close agent proposes for them.
   """
   def list_transactions_for_month(%Scope{} = scope, year, month) do
     first = Date.new!(year, month, 1)
@@ -47,7 +49,7 @@ defmodule IkeEmails.Banking do
         where: t.user_id == ^Scope.user_id(scope),
         where: t.date >= ^first and t.date <= ^last,
         order_by: [asc: t.date, asc: t.transaction_id, asc: t.id],
-        preload: :invoices
+        preload: [:invoices, proposal: :invoice]
     )
   end
 
@@ -121,10 +123,15 @@ defmodule IkeEmails.Banking do
   end
 
   def mark_no_invoice(%Scope{} = scope, %Transaction{} = transaction, note) do
-    scope
-    |> Scope.authorize!(transaction)
-    |> Transaction.no_invoice_changeset(%{no_invoice_note: note})
-    |> Repo.update()
+    with {:ok, transaction} <-
+           scope
+           |> Scope.authorize!(transaction)
+           |> Transaction.no_invoice_changeset(%{no_invoice_note: note})
+           |> Repo.update() do
+      # What the month-close agent proposed is settled, whoever did it
+      Repo.delete_all(from p in Proposal, where: p.transaction_id == ^transaction.id)
+      {:ok, transaction}
+    end
   end
 
   @doc """

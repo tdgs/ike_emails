@@ -143,6 +143,16 @@ defmodule IkeEmails.ElorusTest do
     end
   end
 
+  describe "Invoice.to_api/1" do
+    test "is what from_api/1 reads back, for an invoice with and without fields" do
+      full = Invoice.from_api(invoice_json())
+      bare = Invoice.from_api(%{"id" => "9"})
+
+      assert full |> Invoice.to_api() |> Invoice.from_api() == full
+      assert bare |> Invoice.to_api() |> Invoice.from_api() == bare
+    end
+  end
+
   describe "list_invoices/2" do
     test "parses the invoices" do
       stub_json(page_json([invoice_json(), invoice_json(%{"id" => "2", "total" => "12.50"})]))

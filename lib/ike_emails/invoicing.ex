@@ -13,6 +13,7 @@ defmodule IkeEmails.Invoicing do
   alias IkeEmails.Elorus
   alias IkeEmails.Invoicing.Invoice
   alias IkeEmails.Money
+  alias IkeEmails.MonthClose.Proposal
   alias IkeEmails.Repo
   alias IkeEmails.Settings
   alias IkeEmails.Storage
@@ -235,6 +236,9 @@ defmodule IkeEmails.Invoicing do
       Repo.update_all(where(transactions, [t], t.id in ^transaction_ids),
         set: [no_invoice: false, no_invoice_note: nil]
       )
+
+      # What the month-close agent proposed is settled, whoever did it
+      Repo.delete_all(from p in Proposal, where: p.transaction_id in ^transaction_ids)
 
       :ok
     else

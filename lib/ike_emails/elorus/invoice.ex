@@ -44,6 +44,28 @@ defmodule IkeEmails.Elorus.Invoice do
     }
   end
 
+  @doc """
+  The invoice as the API returns it, for the fields that are kept: what
+  `from_api/1` reads, so `from_api(to_api(invoice)) == invoice`. It is how an invoice
+  is stored to be imported later.
+  """
+  def to_api(%__MODULE__{} = invoice) do
+    %{
+      "id" => invoice.id,
+      "status" => invoice.status,
+      "representation" => invoice.representation,
+      "number" => invoice.number,
+      "sequence_flat" => invoice.sequence_flat,
+      "date" => invoice.date && Date.to_iso8601(invoice.date),
+      "client_display_name" => invoice.client_name,
+      "client_vat_number" => invoice.client_vat_number,
+      "currency_code" => invoice.currency_code,
+      "total" => invoice.total && Decimal.to_string(invoice.total),
+      "payable" => invoice.payable && Decimal.to_string(invoice.payable),
+      "permalink" => invoice.permalink
+    }
+  end
+
   defp blank_to_nil(value) when value in [nil, ""], do: nil
   defp blank_to_nil(value), do: value
 

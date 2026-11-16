@@ -282,4 +282,32 @@ defmodule IkeEmails.OwnershipTest do
   end
 
   defp sha256(pdf), do: :crypto.hash(:sha256, pdf) |> Base.encode16(case: :lower)
+
+  describe "proposals" do
+    test "cannot be fetched, approved or rejected by another user", %{scope_a: a, scope_b: b} do
+      transaction = transaction_fixture(a)
+
+      {:ok, proposal} =
+        IkeEmails.MonthClose.put_proposal(a, transaction, %{}, %{
+          "kind" => "no_invoice",
+          "rationale" => "It is a commission of the bank."
+        })
+
+      assert IkeEmails.MonthClose.get_proposal(b, proposal.id) == nil
+      assert_raise ArgumentError, fn -> IkeEmails.MonthClose.approve(b, proposal) end
+      assert_raise ArgumentError, fn -> IkeEmails.MonthClose.reject(b, proposal) end
+      assert IkeEmails.MonthClose.get_proposal(a, proposal.id)
+    end
+
+    test "cannot be made for the transaction of another user", %{scope_a: a, scope_b: b} do
+      transaction = transaction_fixture(a)
+
+      assert_raise ArgumentError, fn ->
+        IkeEmails.MonthClose.put_proposal(b, transaction, %{}, %{
+          "kind" => "no_invoice",
+          "rationale" => "It is a commission of the bank."
+        })
+      end
+    end
+  end
 end
