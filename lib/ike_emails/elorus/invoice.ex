@@ -1,8 +1,7 @@
 defmodule IkeEmails.Elorus.Invoice do
   @moduledoc """
   An invoice issued in Elorus, as the API returns it. Only what reconciliation
-  needs is parsed; `:raw` keeps the whole response (the line items of a single
-  invoice, for example).
+  needs is parsed.
 
   Amounts are `Decimal`s in `:currency_code`, positive for an invoice.
   """
@@ -10,22 +9,16 @@ defmodule IkeEmails.Elorus.Invoice do
   defstruct [
     :id,
     :status,
-    :draft,
     :representation,
     :number,
     :sequence_flat,
     :date,
-    :due_date,
-    :client_id,
     :client_name,
     :client_vat_number,
     :currency_code,
-    :net,
     :total,
     :payable,
-    :paid,
-    :permalink,
-    :raw
+    :permalink
   ]
 
   @type t :: %__MODULE__{}
@@ -38,22 +31,38 @@ defmodule IkeEmails.Elorus.Invoice do
     %__MODULE__{
       id: data["id"],
       status: data["status"],
-      draft: data["draft"],
       representation: data["representation"],
       number: blank_to_nil(data["number"]),
       sequence_flat: blank_to_nil(data["sequence_flat"]),
       date: date(data["date"]),
-      due_date: date(data["due_date"]),
-      client_id: data["client"],
       client_name: data["client_display_name"],
       client_vat_number: blank_to_nil(data["client_vat_number"]),
       currency_code: data["currency_code"],
-      net: decimal(data["net"]),
       total: decimal(data["total"]),
       payable: decimal(data["payable"]),
-      paid: decimal(data["paid"]),
-      permalink: data["permalink"] |> blank_to_nil() |> https_url(),
-      raw: data
+      permalink: data["permalink"] |> blank_to_nil() |> https_url()
+    }
+  end
+
+  @doc """
+  The invoice as the API returns it, for the fields that are kept: what
+  `from_api/1` reads, so `from_api(to_api(invoice)) == invoice`. It is how an invoice
+  is stored to be imported later.
+  """
+  def to_api(%__MODULE__{} = invoice) do
+    %{
+      "id" => invoice.id,
+      "status" => invoice.status,
+      "representation" => invoice.representation,
+      "number" => invoice.number,
+      "sequence_flat" => invoice.sequence_flat,
+      "date" => invoice.date && Date.to_iso8601(invoice.date),
+      "client_display_name" => invoice.client_name,
+      "client_vat_number" => invoice.client_vat_number,
+      "currency_code" => invoice.currency_code,
+      "total" => invoice.total && Decimal.to_string(invoice.total),
+      "payable" => invoice.payable && Decimal.to_string(invoice.payable),
+      "permalink" => invoice.permalink
     }
   end
 

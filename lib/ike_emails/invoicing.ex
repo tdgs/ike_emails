@@ -18,10 +18,7 @@ defmodule IkeEmails.Invoicing do
   alias IkeEmails.Settings
   alias IkeEmails.Storage
 
-  @max_pdf_bytes 20_000_000
   @pdf_url_ttl 300
-
-  def max_pdf_bytes, do: @max_pdf_bytes
 
   @doc """
   The invoices of the user, newest first, with their transactions. `:search`
@@ -100,6 +97,26 @@ defmodule IkeEmails.Invoicing do
   end
 
   @doc """
+  Whether the invoice is for the amount of the transaction, in the currency it was
+  charged in (see `new_invoice_for/1`): a charge of 18,01 EUR for "20,00 USD" is the
+  amount of an invoice of 20,00 USD.
+  """
+  def same_amount?(%Invoice{} = invoice, %Transaction{} = transaction) do
+    {cents, currency} = charged(transaction)
+    invoice.currency == currency and invoice.amount_cents == cents
+  end
+
+  # The amount in cents and the currency the transaction was charged in
+  defp charged(transaction) do
+    %Invoice{amount_input: input, currency: currency} = new_invoice_for(transaction)
+
+    case Money.parse_cents(input) do
+      {:ok, cents} -> {cents, currency}
+      _invalid -> {nil, currency}
+    end
+  end
+
+  @doc """
   A changeset for the invoice form, with the amount shown as it is typed.
   """
   def change_invoice(%Invoice{} = invoice, attrs \\ %{}) do
@@ -123,7 +140,7 @@ defmodule IkeEmails.Invoicing do
       |> Invoice.create_changeset(attrs, file)
       |> put_elorus_id(opts[:elorus_id])
 
-    with :ok <- check_pdf(pdf),
+    with :ok <- Storage.check_pdf(pdf),
          :ok <- check_new(scope, file.file_sha256),
          {:ok, changeset} <- apply_valid(changeset),
          :ok <- store(file, pdf) do
@@ -144,10 +161,6 @@ defmodule IkeEmails.Invoicing do
       file_sha256: sha256
     }
   end
-
-  defp check_pdf(pdf) when byte_size(pdf) > @max_pdf_bytes, do: {:error, :too_large}
-  defp check_pdf("%PDF-" <> _), do: :ok
-  defp check_pdf(_), do: {:error, :not_a_pdf}
 
   defp check_new(scope, sha256) do
     case Repo.get_by(Invoice, user_id: Scope.user_id(scope), file_sha256: sha256) do
@@ -286,13 +299,12 @@ defmodule IkeEmails.Invoicing do
 
   @doc """
   The invoices of the user that could belong to the transaction, best first: the
-  ones of exactly the amount, then the ones not matched to anything, then the
+  ones of exactly the amount (`same_amount?/2`), then the ones not matched to anything, then the
   closest in date. Invoices already on the transaction are left out. `search`
   narrows them by issuer name or number.
   """
   def suggest_invoices(%Scope{} = scope, %Transaction{} = transaction, search \\ nil) do
     Scope.authorize!(scope, transaction)
-    cents = transaction.amount |> Money.cents_from_decimal() |> abs()
 
     attached =
       from(it in "invoice_transactions",
@@ -308,7 +320,7 @@ defmodule IkeEmails.Invoicing do
     |> Repo.all()
     |> Enum.sort_by(fn invoice ->
       {
-        not (invoice.currency == "EUR" and invoice.amount_cents == cents),
+        not same_amount?(invoice, transaction),
         invoice.transactions != [],
         abs(Date.diff(invoice.date, transaction.date))
       }
@@ -352,14 +364,10 @@ defmodule IkeEmails.Invoicing do
   for what is payable, which is less when a tax is withheld.
   """
   def elorus_match?(%Elorus.Invoice{} = invoice, %Transaction{} = transaction) do
-    %Invoice{amount_input: input, currency: currency} = new_invoice_for(transaction)
+    {cents, currency} = charged(transaction)
 
-    with true <- invoice.currency_code == currency,
-         {:ok, cents} <- Money.parse_cents(input) do
+    invoice.currency_code == currency and cents != nil and
       Enum.any?([invoice.total, invoice.payable], &(decimal_cents(&1) == cents))
-    else
-      _ -> false
-    end
   end
 
   defp decimal_cents(%Decimal{} = amount), do: Money.cents_from_decimal(amount)

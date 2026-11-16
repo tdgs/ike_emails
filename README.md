@@ -110,14 +110,19 @@ it. Sentry does not scrub traces, so a new attribute has to be safe to send.
 ## Users
 
 There is no sign-up page: users are created from the command line, with a password of
-at least 12 characters.
+at least 12 characters. The command asks for the password without showing it, so that it
+is not in the history of the shell:
 
-    mix user.create me@example.com 'a long password'
+    mix user.create me@example.com
 
-In production, where there is no Mix, use the release (on Fly:
-`fly ssh console -C "/app/bin/ike_emails eval '...'"`):
+In production, where there is no Mix, use the release, through Kamal (`-i` gives it the
+terminal it asks the password on):
 
-    bin/ike_emails eval 'IkeEmails.Release.create_user("me@example.com", "a long password")'
+    kamal app exec -i 'bin/ike_emails eval "IkeEmails.Release.create_user(~s(me@example.com))"'
+
+Ten wrong passwords for a user within 15 minutes refuse every login of that user, the
+right password too, until those 15 minutes are over (`IkeEmails.Accounts.LoginThrottle`).
+A login is good for 14 days.
 
 There is no password reset yet. Do not delete a user to start over: their transactions,
 invoices and settings (the sealed Elorus key too) go with them.

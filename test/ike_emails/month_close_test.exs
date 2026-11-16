@@ -344,8 +344,13 @@ defmodule IkeEmails.MonthCloseTest do
       assert [{[%{"same_amount" => true, "already_stored" => false}], false}] =
                LLMStub.tool_results(second)
 
-      assert %Proposal{kind: :import_elorus, elorus_invoice: ^elorus} =
+      assert %Proposal{kind: :import_elorus, elorus_invoice: stored} =
                proposal = proposal(transaction)
+
+      # What the invoice keeps, not the whole answer of Elorus
+      assert stored["id"] == elorus["id"]
+      assert stored["total"] == elorus["total"]
+      refute Map.has_key?(stored, "net")
 
       assert Invoicing.list_invoices(scope) == []
 

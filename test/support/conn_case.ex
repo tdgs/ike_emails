@@ -55,6 +55,9 @@ defmodule IkeEmailsWeb.ConnCase do
   Logs the user in, as the login does: their id is in the session.
   """
   def log_in_user(conn, user) do
-    Plug.Test.init_test_session(conn, %{"user_id" => user.id})
+    Plug.Test.init_test_session(conn, %{
+      "user_id" => user.id,
+      "logged_in_at" => System.system_time(:second)
+    })
   end
 end

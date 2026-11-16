@@ -15,15 +15,16 @@ defmodule IkeEmails.Settings.SealedToken do
   is authenticated with it, so one that is copied to the row of another user
   does not decrypt.
 
-  The server keys are read at every call from the configuration, the first of
-  the list is the one that seals (see `config/runtime.exs`):
+  The server key is read at every call from the configuration (see
+  `config/runtime.exs`), as a list of one `{id, key}`; the first of the list seals:
 
       config :ike_emails, #{inspect(__MODULE__)},
-        keys: [{"2", <<32 bytes>>}, {"1", <<32 bytes>>}],
+        keys: [{"1", <<32 bytes>>}],
         iterations: 600_000
 
-  A value sealed with an older key still opens, and `current_key?/1` tells that
-  it should be sealed again, which is possible when the password is at hand.
+  There is no rotation: a new server key makes every user enter their API key again
+  (see "Deploying" in the README). The id is kept in the sealed value, so that a value
+  of another key is told apart from a wrong password.
   """
 
   alias Plug.Crypto.KeyGenerator
@@ -86,15 +87,6 @@ defmodule IkeEmails.Settings.SealedToken do
   end
 
   def unseal(_sealed, _salt, _password, _user_id), do: {:error, :undecryptable}
-
-  @doc """
-  Whether the value was sealed with the key that seals now. When it was not, it
-  should be sealed again, once it is open.
-  """
-  def current_key?(sealed) when is_binary(sealed) do
-    {key_id, _key} = List.first(keys!())
-    String.starts_with?(sealed, key_id <> ".")
-  end
 
   defp derive_key(password, salt, server_key) do
     password

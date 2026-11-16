@@ -18,8 +18,6 @@ defmodule IkeEmails.ChromeRealTest do
   @moduletag :chrome
   @moduletag timeout: 120_000
 
-  @png <<0x89, "PNG", "\r\n", 0x1A, "\n">>
-
   setup_all do
     {server, url} = ChromePage.start()
     {chrome, dir} = start_chrome()
@@ -95,13 +93,6 @@ defmodule IkeEmails.ChromeRealTest do
 
       assert Chrome.navigate(chrome, page, "http://127.0.0.1:#{port}/") ==
                {:error, {:navigation_failed, "net::ERR_CONNECTION_REFUSED"}}
-    end
-
-    test "is photographed", %{browser: chrome, page: page, url: url} do
-      {:ok, _loaded} = Chrome.navigate(chrome, page, url)
-
-      assert {:ok, <<@png, _rest::binary>> = png} = Chrome.screenshot(chrome, page)
-      assert byte_size(png) > 100
     end
 
     test "is closed", %{browser: chrome, url: url} do

@@ -44,6 +44,8 @@ defmodule IkeEmails.Bank.Driver do
     * `:session_in_use` - the bank allows one session at a time and one is open
     * `{:challenge, kind}` - the bank asks for a second factor (kind is an atom)
     * `:timeout` - the bank did not answer in time
+    * `:no_login_page`, `:no_login_form`, `:no_login_button` - the login page, its form or
+      an enabled login button did not come in time, so nothing was sent to the bank
   """
   @callback login(session(), Credentials.t()) :: :ok | {:error, reason()}
 

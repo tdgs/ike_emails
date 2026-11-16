@@ -11,6 +11,16 @@ defmodule IkeEmails.Storage do
   @callback delete(key :: String.t()) :: :ok | {:error, term()}
   @callback presigned_url(key :: String.t(), expires_in :: pos_integer()) :: String.t()
 
+  @max_pdf_bytes 20_000_000
+
+  @doc "The largest PDF that is kept, in bytes, for the invoices and the statements."
+  def max_pdf_bytes, do: @max_pdf_bytes
+
+  @doc "`:ok` for a PDF that can be kept, or `{:error, :too_large}` or `{:error, :not_a_pdf}`."
+  def check_pdf(pdf) when byte_size(pdf) > @max_pdf_bytes, do: {:error, :too_large}
+  def check_pdf("%PDF-" <> _rest), do: :ok
+  def check_pdf(_other), do: {:error, :not_a_pdf}
+
   def put(key, body, content_type), do: adapter().put(key, body, content_type)
 
   @doc """

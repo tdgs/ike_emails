@@ -23,9 +23,12 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLM do
       ])
     ]
 
+    # No retries: ReqLLM retries 3 times by default, so one answer slower than the
+    # timeout would be sent, and paid for, four times
     options = [
       max_tokens: @max_tokens,
       receive_timeout: @receive_timeout,
+      max_retries: 0,
       req_http_options: http_options()
     ]
 

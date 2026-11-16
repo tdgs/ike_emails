@@ -39,6 +39,7 @@ defmodule IkeEmailsWeb.SessionControllerTest do
 
       assert redirected_to(conn) == ~p"/"
       assert get_session(conn, :user_id) == user.id
+      assert_in_delta get_session(conn, :logged_in_at), System.system_time(:second), 5
       assert get_session(conn, :live_socket_id) == "users_sessions:#{user.id}"
 
       document = recycle(conn) |> get(~p"/") |> html_response(200) |> LazyHTML.from_fragment()
@@ -159,6 +160,27 @@ defmodule IkeEmailsWeb.SessionControllerTest do
       IkeEmails.Repo.delete!(user)
 
       conn = get(conn, ~p"/")
+
+      assert redirected_to(conn) == ~p"/login"
+    end
+
+    # A copy of the cookie stops working, logout or not
+    test "send a session older than 14 days to the login", %{conn: conn, user: user} do
+      fifteen_days_ago = System.system_time(:second) - 15 * 24 * 60 * 60
+
+      conn =
+        conn
+        |> Plug.Test.init_test_session(%{
+          "user_id" => user.id,
+          "logged_in_at" => fifteen_days_ago
+        })
+        |> get(~p"/")
+
+      assert redirected_to(conn) == ~p"/login"
+    end
+
+    test "send a session without the time of its login to the login", %{conn: conn, user: user} do
+      conn = conn |> Plug.Test.init_test_session(%{"user_id" => user.id}) |> get(~p"/")
 
       assert redirected_to(conn) == ~p"/login"
     end

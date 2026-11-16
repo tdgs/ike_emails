@@ -87,8 +87,7 @@ defmodule IkeEmails.Elorus do
 
   See https://developer.elorus.com/en/#operation/invoices_list for all of them.
 
-  Returns `%{count: total, invoices: [...], more?: another page follows}`. The
-  list does not carry everything of an invoice; `get_invoice/2` does.
+  Returns `%{count: total, invoices: [...], more?: another page follows}`.
   """
   def list_invoices(%Credentials{} = credentials, params \\ []) do
     params = params |> Keyword.put_new(:ordering, @default_ordering) |> query_params()
@@ -161,16 +160,6 @@ defmodule IkeEmails.Elorus do
 
       {:error, _reason} = error ->
         error
-    end
-  end
-
-  @doc """
-  A single invoice, with all of its details in `:raw`.
-  """
-  def get_invoice(%Credentials{} = credentials, id) when is_binary(id) do
-    with :ok <- validate_id(id),
-         {:ok, body} <- get(credentials, "/v1.2/invoices/:id/", path_params: [id: id]) do
-      if is_map(body), do: {:ok, Invoice.from_api(body)}, else: {:error, :invalid_response}
     end
   end
 

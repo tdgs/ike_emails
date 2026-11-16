@@ -61,6 +61,9 @@ defmodule IkeEmails.Settings.UserSettings do
   Changeset that stores the sealed API key, and its salt.
   """
   def token_changeset(settings, sealed, salt) do
-    change(settings, elorus_token_sealed: sealed, elorus_token_salt: salt)
+    settings
+    |> change(elorus_token_sealed: sealed, elorus_token_salt: salt)
+    # The first save of a user inserts the row, and so can a save of the other tab
+    |> unique_constraint(:user_id)
   end
 end

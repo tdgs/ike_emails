@@ -68,7 +68,6 @@ env:
     # the container does not start, and a new one makes them enter their keys again
     - SETTINGS_ENCRYPTION_KEY
     - DATABASE_URL
-    - BANK_API_TOKEN
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - ANTHROPIC_API_KEY

@@ -12,10 +12,7 @@ defmodule IkeEmails.Statements do
   alias IkeEmails.Statements.Statement
   alias IkeEmails.Storage
 
-  @max_pdf_bytes 20_000_000
   @pdf_url_ttl 300
-
-  def max_pdf_bytes, do: @max_pdf_bytes
 
   @doc """
   The statements of the user, the latest month first.
@@ -52,7 +49,7 @@ defmodule IkeEmails.Statements do
   `{:storage, reason}`.
   """
   def put_statement(%Scope{} = scope, month, pdf, file_name) when is_binary(pdf) do
-    with :ok <- check_pdf(pdf),
+    with :ok <- Storage.check_pdf(pdf),
          {:ok, date} <- parse_month(month) do
       file = file_facts(scope, date, pdf, file_name)
 
@@ -92,10 +89,6 @@ defmodule IkeEmails.Statements do
       file_sha256: sha256
     }
   end
-
-  defp check_pdf(pdf) when byte_size(pdf) > @max_pdf_bytes, do: {:error, :too_large}
-  defp check_pdf("%PDF-" <> _), do: :ok
-  defp check_pdf(_), do: {:error, :not_a_pdf}
 
   defp save(scope, month, existing, file, pdf) do
     changeset =

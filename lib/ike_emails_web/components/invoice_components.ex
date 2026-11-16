@@ -253,7 +253,9 @@ defmodule IkeEmailsWeb.InvoiceComponents do
     """
   end
 
-  defp upload_error_message(:too_large), do: "The file is larger than 20 MB."
+  defp upload_error_message(:too_large),
+    do: "The file is larger than #{div(IkeEmails.Storage.max_pdf_bytes(), 1_000_000)} MB."
+
   defp upload_error_message(:not_accepted), do: "Only PDF files are accepted."
   defp upload_error_message(:too_many_files), do: "Only one file can be uploaded."
   defp upload_error_message(_error), do: "The file could not be uploaded."

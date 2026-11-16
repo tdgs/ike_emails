@@ -72,7 +72,6 @@ defmodule IkeEmails.MixProject do
       # Seals the Elorus API key of a user, see IkeEmails.Settings.SealedToken. 2.2.1
       # keeps the secret out of the stack trace of a failed decryption
       {:plug_crypto, "~> 2.2.1"},
-      {:swoosh, "~> 1.16"},
       {:req, "~> 0.5"},
       {:req_s3, "~> 0.2.5"},
       {:req_llm, "~> 1.29"},
@@ -87,9 +86,7 @@ defmodule IkeEmails.MixProject do
       {:opentelemetry_semantic_conventions, "~> 1.27"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
-      {:gettext, "~> 0.26"},
       {:jason, "~> 1.2"},
-      {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"}
     ]
   end

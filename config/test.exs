@@ -50,12 +50,6 @@ config :ike_emails, IkeEmailsWeb.Endpoint,
   secret_key_base: "Ha7b7FpsRJ7SQ4sHl3+jvNtkDPl5wfIIyjiNDLGeiPYlW+Yira4QWjOd7pcpfOd/",
   server: false
 
-# In test we don't send emails
-config :ike_emails, IkeEmails.Mailer, adapter: Swoosh.Adapters.Test
-
-# Disable swoosh api client as it is only required for production adapters
-config :swoosh, :api_client, false
-
 # Print only warnings and errors during test
 config :logger, level: :warning
 

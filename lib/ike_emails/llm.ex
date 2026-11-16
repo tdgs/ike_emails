@@ -66,6 +66,11 @@ defmodule IkeEmails.LLM do
 
   def reason(%ReqLLM.Error.API.Request{status: 429}), do: :rate_limited
   def reason(%ReqLLM.Error.API.Timeout{}), do: :timeout
+
+  # A receive timeout comes from Req as a transport error inside the error of the request
+  def reason(%ReqLLM.Error.API.Request{cause: %Req.TransportError{reason: :timeout}}),
+    do: :timeout
+
   def reason(%ReqLLM.Error.API.SchemaValidation{}), do: :invalid_response
   def reason(%ReqLLM.Error.API.JSONDecode{}), do: :invalid_response
   def reason(%ReqLLM.Error.API.Response{}), do: :invalid_response

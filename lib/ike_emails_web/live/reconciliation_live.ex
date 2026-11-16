@@ -61,14 +61,14 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     |> assign(:duplicate, nil)
     |> assign(:pdf_error, nil)
     |> assign(:suggestion_search, "")
-    |> assign_form(Invoicing.change_invoice(prefill))
+    |> InvoiceUpload.assign_form(Invoicing.change_invoice(prefill))
     |> load_suggestions()
     |> reset_elorus()
-    |> reset_extract()
+    |> InvoiceUpload.reset_extract()
   end
 
   defp open_transaction(socket, _action, _params) do
-    socket |> assign(:transaction, nil) |> reset_elorus() |> reset_extract()
+    socket |> assign(:transaction, nil) |> reset_elorus() |> InvoiceUpload.reset_extract()
   end
 
   defp month_from(scope, param, transaction) do
@@ -136,19 +136,6 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     |> stream(:elorus_invoices, [], reset: true)
   end
 
-  # A PDF that is still being read is forgotten: the result would be for another
-  # panel, or for a file that is gone
-  defp reset_extract(socket) do
-    socket
-    |> cancel_async(:extract)
-    |> assign(:extracting?, false)
-    |> assign(:extract_error, nil)
-  end
-
-  defp assign_form(socket, %Ecto.Changeset{} = changeset) do
-    assign(socket, :form, to_form(changeset, as: :invoice))
-  end
-
   ## Events
 
   @impl true
@@ -198,71 +185,20 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     {:noreply, refresh(socket)}
   end
 
-  def handle_event("validate", %{"invoice" => params}, socket) do
-    changeset =
-      socket.assigns.prefill |> Invoicing.change_invoice(params) |> Map.put(:action, :validate)
+  def handle_event("validate", %{"invoice" => params}, socket),
+    do: {:noreply, InvoiceUpload.validate(socket, socket.assigns.prefill, params)}
 
-    {:noreply,
-     socket
-     |> assign(:pdf_error, nil)
-     |> assign(:extract_error, nil)
-     |> assign_form(changeset)}
-  end
+  def handle_event("cancel-upload", %{"ref" => ref}, socket),
+    do: {:noreply, InvoiceUpload.cancel(socket, ref)}
 
-  def handle_event("cancel-upload", %{"ref" => ref}, socket) do
-    {:noreply, socket |> cancel_upload(:pdf, ref) |> reset_extract()}
-  end
-
-  def handle_event("extract", _params, %{assigns: %{extracting?: true}} = socket) do
-    {:noreply, socket}
-  end
-
-  def handle_event("extract", _params, socket) do
-    with {:configured, true} <- {:configured, InvoiceExtractor.configured?()},
-         {:ok, pdf} <- InvoiceUpload.peek_pdf(socket) do
-      hints = InvoiceUpload.hints(socket.assigns.prefill)
-      business = Settings.business(socket.assigns.current_scope)
-
-      {:noreply,
-       socket
-       |> assign(:extract_error, nil)
-       |> assign(:extracting?, true)
-       |> start_async(:extract, fn ->
-         InvoiceExtractor.extract(pdf, hints: hints, business: business)
-       end)}
-    else
-      {:configured, false} ->
-        message = InvoiceUpload.extraction_error_message(:not_configured)
-        {:noreply, assign(socket, :extract_error, message)}
-
-      {:error, message} ->
-        {:noreply, assign(socket, :pdf_error, message)}
-    end
-  end
+  def handle_event("extract", _params, socket),
+    do: {:noreply, InvoiceUpload.extract(socket, socket.assigns.prefill)}
 
   def handle_event("save", %{"invoice" => params}, socket) do
-    changeset = Invoicing.change_invoice(socket.assigns.prefill, params)
+    %{prefill: prefill, transaction: transaction, month: month} = socket.assigns
+    opts = [transaction_ids: [transaction.id]]
 
-    with {:valid, true} <- {:valid, changeset.valid?},
-         {:ok, {pdf, name}} <- InvoiceUpload.read_pdf(socket) do
-      transaction_ids = [socket.assigns.transaction.id]
-
-      socket.assigns.current_scope
-      |> Invoicing.create_invoice(params, pdf, name, transaction_ids: transaction_ids)
-      |> handle_created(socket)
-    else
-      {:valid, false} ->
-        {:noreply,
-         socket
-         |> assign_form(Map.put(changeset, :action, :validate))
-         |> assign(:pdf_error, InvoiceUpload.problem(socket))}
-
-      {:error, message} ->
-        {:noreply,
-         socket
-         |> assign_form(Map.put(changeset, :action, :validate))
-         |> assign(:pdf_error, message)}
-    end
+    {:noreply, InvoiceUpload.create(socket, prefill, params, opts, month_path(month))}
   end
 
   def handle_event("attach_existing", %{"id" => invoice_id}, socket) do
@@ -375,39 +311,11 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     {:noreply, refresh(socket)}
   end
 
-  ## Reading the PDF with AI
-  #
-  # It takes a few seconds, so it runs in an async task. Another panel or a
-  # cancelled upload cancels it, see reset_extract/1.
+  ## Reading the PDF with AI, see IkeEmailsWeb.InvoiceUpload
 
   @impl true
-  def handle_async(:extract, {:ok, {:ok, found}}, socket) when found == %{} do
-    {:noreply, extract_failed(socket, :invalid_response)}
-  end
-
-  def handle_async(:extract, {:ok, {:ok, found}}, socket) do
-    %{prefill: prefill, form: form} = socket.assigns
-    params = InvoiceUpload.merge_extracted(form.params, found)
-    changeset = prefill |> Invoicing.change_invoice(params) |> Map.put(:action, :validate)
-
-    {:noreply,
-     socket
-     |> assign(:extracting?, false)
-     |> assign(:extract_error, nil)
-     |> assign_form(changeset)
-     |> put_flash(:info, "Filled in from the PDF. Check the values before saving.")}
-  end
-
-  def handle_async(:extract, {:ok, {:error, reason}}, socket) do
-    {:noreply, extract_failed(socket, reason)}
-  end
-
-  def handle_async(:extract, {:exit, {:shutdown, :cancel}}, socket), do: {:noreply, socket}
-
-  def handle_async(:extract, {:exit, reason}, socket) do
-    Logger.error("Reading an invoice with AI crashed: #{inspect(reason)}")
-    {:noreply, extract_failed(socket, :crashed)}
-  end
+  def handle_async(:extract, result, socket),
+    do: {:noreply, InvoiceUpload.extract_result(socket, socket.assigns.prefill, result)}
 
   def handle_async(:unlock_elorus, {:ok, :ok}, socket) do
     {:noreply,
@@ -455,12 +363,6 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   defp approve_error_message(%Ecto.Changeset{}), do: "The values cannot be saved."
   defp approve_error_message(reason), do: elorus_error_message(reason)
-
-  defp extract_failed(socket, reason) do
-    socket
-    |> assign(:extracting?, false)
-    |> assign(:extract_error, InvoiceUpload.extraction_error_message(reason))
-  end
 
   ## Elorus
   #
@@ -653,7 +555,9 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   defp elorus_error_message(:not_found), do: "Elorus does not have that invoice any more."
 
-  defp elorus_error_message(:too_large), do: "The PDF from Elorus is larger than 20 MB."
+  defp elorus_error_message(:too_large),
+    do:
+      "The PDF from Elorus is larger than #{div(IkeEmails.Storage.max_pdf_bytes(), 1_000_000)} MB."
 
   defp elorus_error_message(:not_a_pdf), do: "Elorus did not return a PDF for that invoice."
 
@@ -699,28 +603,6 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   defp elorus_error_message(reason) do
     Logger.warning("Elorus failed: #{inspect(reason)}")
     "Something went wrong with Elorus. Try again."
-  end
-
-  defp handle_created({:ok, _invoice}, socket) do
-    {:noreply,
-     socket
-     |> put_flash(:info, "Invoice added.")
-     |> push_patch(to: month_path(socket.assigns.month))}
-  end
-
-  defp handle_created({:error, %Ecto.Changeset{} = changeset}, socket) do
-    {:noreply, assign_form(socket, changeset)}
-  end
-
-  defp handle_created({:error, {:duplicate, invoice}}, socket) do
-    {:noreply, assign(socket, :duplicate, invoice)}
-  end
-
-  defp handle_created({:error, reason}, socket) do
-    if match?({:storage, _}, reason),
-      do: Logger.error("Storing an invoice PDF failed: #{inspect(reason)}")
-
-    {:noreply, assign(socket, :pdf_error, InvoiceUpload.error_message(reason))}
   end
 
   ## Rendering
@@ -1017,7 +899,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
 
   defp summary(assigns) do
     summary = assigns.summary
-    reconciled = summary.invoiced + summary.exempt
+    reconciled = summary.paid_reconciled
     payments = reconciled + summary.missing
     assigns = assign(assigns, reconciled: reconciled, payments: payments)
 
@@ -1398,8 +1280,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   attr :transaction, :map, required: true
 
   defp suggestion(assigns) do
-    cents = assigns.transaction.amount |> Money.cents_from_decimal() |> abs()
-    exact? = assigns.invoice.currency == "EUR" and assigns.invoice.amount_cents == cents
+    exact? = Invoicing.same_amount?(assigns.invoice, assigns.transaction)
     assigns = assign(assigns, exact?: exact?, matched: length(assigns.invoice.transactions))
 
     ~H"""

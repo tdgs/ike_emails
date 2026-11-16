@@ -104,11 +104,15 @@ defmodule IkeEmails.MonthClose.Agent do
     end)
   end
 
+  # No retries, as for the reading of an invoice: ReqLLM retries 3 times by default,
+  # so a step slower than the timeout would be sent, and paid for, four times. A run
+  # that fails keeps what it found, and can be run again.
   defp options(model, tools) do
     [
       tools: tools,
       max_tokens: @max_tokens,
       receive_timeout: @receive_timeout,
+      max_retries: 0,
       req_http_options: Keyword.get(config(), :req_http_options, [])
     ] ++ cache(LLM.provider(model))
   end
@@ -380,7 +384,7 @@ defmodule IkeEmails.MonthClose.Agent do
 
       %Elorus.Invoice{} = invoice ->
         if Decimal.positive?(transaction.amount),
-          do: {:ok, %{elorus_invoice: invoice.raw}},
+          do: {:ok, %{elorus_invoice: Elorus.Invoice.to_api(invoice)}},
           else: {:error, "Only income is paid for an invoice of Elorus."}
     end
   end

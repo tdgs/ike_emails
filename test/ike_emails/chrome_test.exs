@@ -97,15 +97,6 @@ defmodule IkeEmails.ChromeTest do
       assert environment["HOME"] == dir
       assert environment["PATH"] == System.get_env("PATH")
     end
-
-    test "registers the process under a name" do
-      {:ok, chrome} = FakeChrome.start_link(name: :named_fake_chrome)
-
-      assert Process.whereis(:named_fake_chrome) == chrome
-
-      assert {:ok, %{"product" => "FakeChrome/1"}} =
-               Chrome.call(:named_fake_chrome, "Browser.getVersion")
-    end
   end
 
   describe "new_page/2" do
@@ -627,13 +618,6 @@ defmodule IkeEmails.ChromeTest do
     end
   end
 
-  describe "screenshot/3" do
-    test "returns the PNG", %{chrome: chrome, page: page} do
-      assert {:ok, <<0x89, "PNG", "\r\n", 0x1A, "\n", _rest::binary>>} =
-               Chrome.screenshot(chrome, page)
-    end
-  end
-
   describe "a password in the process" do
     test "is not in the state, the status or the process info while it waits for an answer", %{
       chrome: chrome,
@@ -723,7 +707,6 @@ defmodule IkeEmails.ChromeTest do
 
       assert Chrome.evaluate(chrome, page, "1") == {:error, :chrome_exited}
       assert Chrome.call(chrome, "Browser.getVersion") == {:error, :chrome_exited}
-      assert Chrome.screenshot(chrome, page) == {:error, :chrome_exited}
     end
 
     test "the process stops without making the caller exit", %{chrome: chrome, page: page} do

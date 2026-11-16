@@ -48,7 +48,8 @@ config :ike_emails, IkeEmails.Elorus, base_url: "https://api.elorus.com"
 # The API key of Elorus of a user is sealed with a key of the server and the
 # password of the user, see IkeEmails.Settings.SealedToken. The key of the server
 # comes from the environment, see config/runtime.exs. The iterations of PBKDF2 are
-# to take 200 to 500 ms on the server
+# to take 200 to 500 ms on the server. They are not stored with a sealed key: changing
+# them makes every saved key impossible to open, and every user enters theirs again
 config :ike_emails, IkeEmails.Settings.SealedToken, iterations: 600_000
 
 # The key is unlocked in a process of its own, which is gone when it was not used
@@ -67,15 +68,6 @@ config :ike_emails, IkeEmails.MonthClose, model: nil
 
 # The bank is reached with a browser that logs in to myAlpha, see IkeEmails.Bank.Driver
 config :ike_emails, IkeEmails.Bank, driver: IkeEmails.Bank.Driver.Chrome
-
-# Configures the mailer
-#
-# By default it uses the "Local" adapter which stores the emails
-# locally. You can see the emails in your browser, at "/dev/mailbox".
-#
-# For production it's recommended to configure a different adapter
-# at the `config/runtime.exs`.
-config :ike_emails, IkeEmails.Mailer, adapter: Swoosh.Adapters.Local
 
 # Configure esbuild (the version is required)
 config :esbuild,
