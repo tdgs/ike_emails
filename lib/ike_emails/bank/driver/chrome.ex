@@ -4,7 +4,7 @@ defmodule IkeEmails.Bank.Driver.Chrome do
   myAlpha Web through the login page, and reads the statements by calling the bank's own
   endpoints from inside the logged in page, with the scripts of `priv/bank`
   (`IkeEmails.Bank.Alpha.Script`). It is the crawler written in Gleam, step by step: the
-  same page, the same selectors, the same waits.
+  same page, the same selectors but the one of the login button, the same waits.
 
   The browser is `IkeEmails.Chrome`, and nothing else in the app uses it. The page is
   driven by the functions of the scripts, and what is typed in is passed only as the
@@ -62,9 +62,10 @@ defmodule IkeEmails.Bank.Driver.Chrome do
   The ones that the crawl tells apart are those of `c:IkeEmails.Bank.Driver.login/2`.
   Besides them:
 
-    * `:timeout` - something that was waited for did not come in time: the login form,
-      the button, the end of the logout, a call of the browser, the answer of the bank to
-      the request for the login page
+    * `:timeout` - something that was waited for did not come in time: the answer of the
+      bank to a login that was sent, the end of the logout, a call of the browser
+    * `:no_login_page`, `:no_login_form`, `:no_login_button` - `login/2` gave up before it
+      clicked, so nothing was sent to the bank
     * `:no_page` - there is no page yet, because there was no login
     * `:unexpected_response` - the script answered with something else than what it
       should have
@@ -95,7 +96,9 @@ defmodule IkeEmails.Bank.Driver.Chrome do
   @login_url "https://secure.alpha.gr/myAlphaWeb/business/"
   @username_selector "input[placeholder*='username']"
   @password_selector "input[type='password']"
-  @submit_selector "button.login-button:not([disabled])"
+  # Not the selector of the crawler in Gleam, `button.login-button`: the login page of
+  # November 2026 has no such class. Its button is the one submit button of the visible form
+  @submit_selector "form button[type='submit']:not([disabled])"
   @logout_selector "a.lo"
 
   @navigation_timeout :timer.seconds(30)
@@ -286,7 +289,7 @@ defmodule IkeEmails.Bank.Driver.Chrome do
   @doc """
   Waits until the login form is on the page, as `login/2` does: for the time of the option
   `:element_timeout` (30 seconds), looking again every `:poll_interval`. `mix bank.probe`
-  uses it to look at the page once the form is drawn, which AngularJS does some time after
+  uses it to look at the page once the form is drawn, which Angular does some time after
   the page is there.
   """
   @spec await_login_form(session(), Page.t()) :: {:ok, :found} | {:error, term()}
@@ -312,8 +315,13 @@ defmodule IkeEmails.Bank.Driver.Chrome do
 
   It waits for the form (up to 30 seconds, from the request for the page, whether the page
   has loaded or not), types the user name and the password, waits for the button, which
-  stays disabled until the form is valid, and clicks it. Then it waits, up to two minutes,
-  until the page has either left the `/auth/` pages (`:ok`) or shows an error. When the
+  stays disabled until the form is valid, and clicks it. When one of these waits runs out,
+  nothing has been sent to the bank, and the result says which: `{:error, :no_login_page}`
+  (the bank did not answer the request for the page), `{:error, :no_login_form}` or
+  `{:error, :no_login_button}` (the button never became enabled).
+
+  After the click it waits, up to two minutes, until the page has either left the `/auth/`
+  pages (`:ok`) or shows an error. When the
   error says that the account is in use it is `{:error, :session_in_use}`, whatever else
   it says is `{:error, :bad_credentials}`. An error element that has no text yet is looked at
   again, as is an answer of the page that is none of these. A page that does nothing in that
@@ -323,16 +331,23 @@ defmodule IkeEmails.Bank.Driver.Chrome do
   @impl true
   @spec login(session(), Credentials.t()) :: :ok | {:error, term()}
   def login(session, %Credentials{} = credentials) do
-    with {:ok, page} <- login_page(session),
-         {:ok, _found} <- await_visible(session, page, @password_selector),
+    with {:ok, page} <- before_click(login_page(session), :no_login_page),
+         {:ok, _found} <-
+           before_click(await_visible(session, page, @password_selector), :no_login_form),
          :ok <- fill(session, page, @username_selector, credentials.username),
          :ok <- fill(session, page, @password_selector, credentials.password),
          # The button stays disabled until the form is valid
-         {:ok, _found} <- await_visible(session, page, @submit_selector),
+         {:ok, _found} <-
+           before_click(await_visible(session, page, @submit_selector), :no_login_button),
          :ok <- click(session, page, @submit_selector) do
       await_outcome(session, page)
     end
   end
+
+  # A wait that runs out before the click has sent nothing to the bank, so it is not the
+  # `:timeout` of a login that was sent and not answered
+  defp before_click({:error, :timeout}, reason), do: {:error, reason}
+  defp before_click(result, _reason), do: result
 
   # The page has two login forms, and the first is hidden: login.js takes a visible element
   defp await_visible(session, page, selector) do

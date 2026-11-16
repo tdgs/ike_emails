@@ -12,8 +12,9 @@ defmodule IkeEmails.Application do
     children = [
       IkeEmailsWeb.Telemetry,
       IkeEmails.Repo,
-      {DNSCluster, query: Application.get_env(:ike_emails, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: IkeEmails.PubSub},
+      # Counts the wrong passwords, see IkeEmails.Accounts.LoginThrottle
+      IkeEmails.Accounts.LoginThrottle,
       # Runs the slow calls (to Elorus) away from the LiveViews that wait for them
       {Task.Supervisor, name: IkeEmails.TaskSupervisor},
       # The processes that hold the Elorus credentials of the users who unlocked

@@ -15,11 +15,22 @@ defmodule IkeEmails.Release do
 
   @doc """
   Creates a user. There is no sign-up page, so this is how users are made in
-  production, where there is no Mix:
+  production, where there is no Mix. It asks for the password at the terminal, without
+  showing it, so that it is not in the history of the shell or the output of Kamal:
 
-      bin/ike_emails eval 'IkeEmails.Release.create_user("me@example.com", "a long password")'
+      kamal app exec -i 'bin/ike_emails eval "IkeEmails.Release.create_user(~s(me@example.com))"'
   """
-  def create_user(email, password) do
+  def create_user(email) do
+    password =
+      case IkeEmails.Terminal.read_secret("Password (not shown, at least 12 characters): ") do
+        {:ok, password} ->
+          password
+
+        {:error, reason} ->
+          IO.puts(IkeEmails.Terminal.message(reason))
+          System.halt(1)
+      end
+
     load_app()
 
     {:ok, result, _apps} =
@@ -33,7 +44,7 @@ defmodule IkeEmails.Release do
 
       {:error, changeset} ->
         IO.puts(
-          "Could not create the user: #{inspect(IkeEmails.Accounts.error_messages(changeset))}"
+          "Could not create the user: #{inspect(Ecto.Changeset.traverse_errors(changeset, &IkeEmailsWeb.CoreComponents.translate_error/1))}"
         )
 
         System.halt(1)

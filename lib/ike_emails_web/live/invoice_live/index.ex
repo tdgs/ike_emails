@@ -5,14 +5,11 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
 
   use IkeEmailsWeb, :live_view
 
-  require Logger
-
   import IkeEmailsWeb.InvoiceComponents
 
   alias IkeEmails.InvoiceExtractor
   alias IkeEmails.Invoicing
   alias IkeEmails.Invoicing.Invoice
-  alias IkeEmails.Settings
   alias IkeEmailsWeb.InvoiceUpload
 
   @impl true
@@ -37,7 +34,7 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
   end
 
   defp apply_action(socket, :index, _params) do
-    socket |> assign(:invoice, nil) |> reset_extract()
+    socket |> assign(:invoice, nil) |> InvoiceUpload.reset_extract()
   end
 
   defp apply_action(socket, :new, _params) do
@@ -47,8 +44,8 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
     |> assign(:invoice, invoice)
     |> assign(:duplicate, nil)
     |> assign(:pdf_error, nil)
-    |> reset_extract()
-    |> assign_form(Invoicing.change_invoice(invoice))
+    |> InvoiceUpload.reset_extract()
+    |> InvoiceUpload.assign_form(Invoicing.change_invoice(invoice))
   end
 
   defp apply_action(socket, :edit, %{"id" => id}) do
@@ -56,8 +53,8 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
 
     socket
     |> assign(:invoice, invoice)
-    |> reset_extract()
-    |> assign_form(Invoicing.change_invoice(invoice))
+    |> InvoiceUpload.reset_extract()
+    |> InvoiceUpload.assign_form(Invoicing.change_invoice(invoice))
   end
 
   defp load_invoices(socket) do
@@ -65,19 +62,6 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
       Invoicing.list_invoices(socket.assigns.current_scope, search: socket.assigns.search)
 
     stream(socket, :invoices, invoices, reset: true)
-  end
-
-  # A PDF that is still being read is forgotten: the result would be for another
-  # page, or for a file that is gone
-  defp reset_extract(socket) do
-    socket
-    |> cancel_async(:extract)
-    |> assign(:extracting?, false)
-    |> assign(:extract_error, nil)
-  end
-
-  defp assign_form(socket, %Ecto.Changeset{} = changeset) do
-    assign(socket, :form, to_form(changeset, as: :invoice))
   end
 
   ## Events
@@ -96,47 +80,14 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
     {:noreply, stream_delete(socket, :invoices, invoice)}
   end
 
-  def handle_event("validate", %{"invoice" => params}, socket) do
-    changeset =
-      socket.assigns.invoice |> Invoicing.change_invoice(params) |> Map.put(:action, :validate)
+  def handle_event("validate", %{"invoice" => params}, socket),
+    do: {:noreply, InvoiceUpload.validate(socket, socket.assigns.invoice, params)}
 
-    {:noreply,
-     socket
-     |> assign(:pdf_error, nil)
-     |> assign(:extract_error, nil)
-     |> assign_form(changeset)}
-  end
+  def handle_event("cancel-upload", %{"ref" => ref}, socket),
+    do: {:noreply, InvoiceUpload.cancel(socket, ref)}
 
-  def handle_event("cancel-upload", %{"ref" => ref}, socket) do
-    {:noreply, socket |> cancel_upload(:pdf, ref) |> reset_extract()}
-  end
-
-  def handle_event("extract", _params, %{assigns: %{extracting?: true}} = socket) do
-    {:noreply, socket}
-  end
-
-  def handle_event("extract", _params, socket) do
-    with {:configured, true} <- {:configured, InvoiceExtractor.configured?()},
-         {:ok, pdf} <- InvoiceUpload.peek_pdf(socket) do
-      hints = InvoiceUpload.hints(socket.assigns.invoice)
-      business = Settings.business(socket.assigns.current_scope)
-
-      {:noreply,
-       socket
-       |> assign(:extract_error, nil)
-       |> assign(:extracting?, true)
-       |> start_async(:extract, fn ->
-         InvoiceExtractor.extract(pdf, hints: hints, business: business)
-       end)}
-    else
-      {:configured, false} ->
-        message = InvoiceUpload.extraction_error_message(:not_configured)
-        {:noreply, assign(socket, :extract_error, message)}
-
-      {:error, message} ->
-        {:noreply, assign(socket, :pdf_error, message)}
-    end
-  end
+  def handle_event("extract", _params, socket),
+    do: {:noreply, InvoiceUpload.extract(socket, socket.assigns.invoice)}
 
   def handle_event("save", %{"invoice" => params}, %{assigns: %{live_action: :edit}} = socket) do
     case Invoicing.update_invoice(socket.assigns.current_scope, socket.assigns.invoice, params) do
@@ -145,88 +96,20 @@ defmodule IkeEmailsWeb.InvoiceLive.Index do
          socket |> put_flash(:info, "Invoice updated.") |> push_patch(to: ~p"/invoices")}
 
       {:error, changeset} ->
-        {:noreply, assign_form(socket, Map.put(changeset, :action, :validate))}
+        {:noreply, InvoiceUpload.assign_form(socket, Map.put(changeset, :action, :validate))}
     end
   end
 
   def handle_event("save", %{"invoice" => params}, %{assigns: %{live_action: :new}} = socket) do
-    changeset = Invoicing.change_invoice(socket.assigns.invoice, params)
-
-    with {:valid, true} <- {:valid, changeset.valid?},
-         {:ok, {pdf, name}} <- InvoiceUpload.read_pdf(socket) do
-      socket.assigns.current_scope
-      |> Invoicing.create_invoice(params, pdf, name)
-      |> handle_created(socket)
-    else
-      {:valid, false} ->
-        {:noreply,
-         socket
-         |> assign_form(Map.put(changeset, :action, :validate))
-         |> assign(:pdf_error, InvoiceUpload.problem(socket))}
-
-      {:error, message} ->
-        {:noreply,
-         socket
-         |> assign_form(Map.put(changeset, :action, :validate))
-         |> assign(:pdf_error, message)}
-    end
+    %{invoice: invoice} = socket.assigns
+    {:noreply, InvoiceUpload.create(socket, invoice, params, [], ~p"/invoices")}
   end
 
-  ## Reading the PDF with AI
+  ## Reading the PDF with AI, see IkeEmailsWeb.InvoiceUpload
 
   @impl true
-  def handle_async(:extract, {:ok, {:ok, found}}, socket) when found == %{} do
-    {:noreply, extract_failed(socket, :invalid_response)}
-  end
-
-  def handle_async(:extract, {:ok, {:ok, found}}, socket) do
-    %{invoice: invoice, form: form} = socket.assigns
-    params = InvoiceUpload.merge_extracted(form.params, found)
-    changeset = invoice |> Invoicing.change_invoice(params) |> Map.put(:action, :validate)
-
-    {:noreply,
-     socket
-     |> assign(:extracting?, false)
-     |> assign(:extract_error, nil)
-     |> assign_form(changeset)
-     |> put_flash(:info, "Filled in from the PDF. Check the values before saving.")}
-  end
-
-  def handle_async(:extract, {:ok, {:error, reason}}, socket) do
-    {:noreply, extract_failed(socket, reason)}
-  end
-
-  def handle_async(:extract, {:exit, {:shutdown, :cancel}}, socket), do: {:noreply, socket}
-
-  def handle_async(:extract, {:exit, reason}, socket) do
-    Logger.error("Reading an invoice with AI crashed: #{inspect(reason)}")
-    {:noreply, extract_failed(socket, :crashed)}
-  end
-
-  defp extract_failed(socket, reason) do
-    socket
-    |> assign(:extracting?, false)
-    |> assign(:extract_error, InvoiceUpload.extraction_error_message(reason))
-  end
-
-  defp handle_created({:ok, _invoice}, socket) do
-    {:noreply, socket |> put_flash(:info, "Invoice added.") |> push_patch(to: ~p"/invoices")}
-  end
-
-  defp handle_created({:error, %Ecto.Changeset{} = changeset}, socket) do
-    {:noreply, assign_form(socket, changeset)}
-  end
-
-  defp handle_created({:error, {:duplicate, invoice}}, socket) do
-    {:noreply, assign(socket, :duplicate, invoice)}
-  end
-
-  defp handle_created({:error, reason}, socket) do
-    if match?({:storage, _}, reason),
-      do: Logger.error("Storing an invoice PDF failed: #{inspect(reason)}")
-
-    {:noreply, assign(socket, :pdf_error, InvoiceUpload.error_message(reason))}
-  end
+  def handle_async(:extract, result, socket),
+    do: {:noreply, InvoiceUpload.extract_result(socket, socket.assigns.invoice, result)}
 
   ## Rendering
 

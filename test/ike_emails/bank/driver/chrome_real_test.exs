@@ -361,7 +361,7 @@ defmodule IkeEmails.Bank.Driver.ChromeRealTest do
       end)
     end
 
-    test "shows the text of the error of the login page, which is the one text it prints", %{
+    test "shows the text of the error of the login page, among the messages too", %{
       url: url
     } do
       with_session(url, fn session ->
@@ -375,11 +375,17 @@ defmodule IkeEmails.Bank.Driver.ChromeRealTest do
         {:ok, _} =
           call.("fill", %{selector: "input[type='password']", value: Secret.new("wrong")})
 
-        {:ok, _} = call.("click", %{selector: "button.login-button:not([disabled])"})
+        {:ok, _} = call.("click", %{selector: "form button[type='submit']:not([disabled])"})
 
         {:ok, text} = session.module.evaluate(session.chrome, page, Probe.structure_script())
 
-        assert Jason.decode!(text)["login_error"] == "The user name or the password is wrong"
+        snapshot = Jason.decode!(text)
+        assert snapshot["login_error"] == "The user name or the password is wrong"
+
+        assert [%{"tag" => "div", "classes" => ["login-error"], "text" => text}] =
+                 snapshot["alerts"]
+
+        assert text == "The user name or the password is wrong"
       end)
     end
   end

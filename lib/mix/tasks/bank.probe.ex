@@ -14,9 +14,11 @@ defmodule Mix.Tasks.Bank.Probe do
       is made in the temporary directory and removed at the end. A new profile is how to
       see whether the bank asks for a second factor of a browser it does not know; a profile
       that is given is kept, and so is whatever the bank made the browser remember in it
-    * `--lang CODE` - the language of the browser, `en-US`. The login page is found by the
-      word `username` in the placeholder of its field, which is in English
-    * `--wait SECONDS` - how long to wait after the login before looking at the page, 15
+    * `--lang CODE` - the language of the browser, `en-US`. The login page of November 2026
+      is in Greek whatever it is, and its field is found by the word `username`, in Latin
+      letters, in its placeholder
+    * `--wait SECONDS` - how long to wait after a login that worked before looking at the
+      page, 15
 
   It asks for the user name and the password at the terminal, and does not show what is
   typed. They are never taken from an argument or from the environment, and are not printed.
@@ -38,22 +40,27 @@ defmodule Mix.Tasks.Bank.Probe do
     * the path of its address, without the query and the fragment
     * how many forms it has
     * for every input, button, select and link that is visible: the tag, and its `type`, `id`,
-      `name`, `placeholder` and `aria-label` when it has them, and a few of its classes
-    * the text of the element `.login-error`, which is the one text of the page it prints,
-      because that is what tells a refused login from the rest
+      `name`, `placeholder` and `aria-label` when it has them, a few of its classes, and
+      `disabled` when it is
+    * the text of the element `.login-error`, and of the messages the page shows (elements
+      with `role=alert` or `aria-live`, the errors and snack bars of Angular Material),
+      cut to 80 characters: the texts of the page it prints, because they are what tells
+      a refused login from the rest. They are not printed after a login that worked
 
   It never prints the value of a field, a cookie, the local storage, the text of the page
   or an address with its query, and it takes no screenshot. It writes no file but the
   profile of the browser.
 
   After the login it prints how it ended, which is the result of the driver: `:ok`,
-  `{:error, :bad_credentials}`, `{:error, :session_in_use}` or `{:error, :timeout}`. When the
-  result is `:ok` it prints the path the browser is on and logs out, and it logs out also
-  when the task is stopped by an error after the login, so that no session of the bank is
-  left open. When it is a timeout, or the page is still on the `/auth/` pages without an
-  error to show, the login neither succeeded nor failed: the page is waiting for something.
-  That is how a second factor (a code, a question) would show, and the structure that is
-  printed then is what it is made of, to be read before a driver is written for it.
+  `{:error, :bad_credentials}`, `{:error, :session_in_use}`, `{:error, :timeout}`, or one of
+  `:no_login_page`, `:no_login_form` and `:no_login_button`, which mean that nothing was
+  sent to the bank. When the result is `:ok` it prints the path the browser is on and logs
+  out, and it logs out also when the task is stopped by an error after the login, so that
+  no session of the bank is left open. A timeout means that the login was sent and that
+  the bank's answer was not recognised: the page is waiting for something, or the bank
+  refused it somewhere else than `.login-error`, which may count as a failed login. That is
+  how a second factor (a code, a question) would show, and the structure that is printed
+  then is what it is made of, to be read before a driver is written for it.
 
   The bank allows one session at a time, so a session of the person's own is ended by this
   login. Run it only when it is the person who runs it.
@@ -83,8 +90,13 @@ defmodule Mix.Tasks.Bank.Probe do
       placeholder: cut(element.getAttribute("placeholder")),
       aria_label: cut(element.getAttribute("aria-label")),
       classes: [...element.classList].slice(0, 6).map(cut),
+      disabled: element.disabled === true,
     });
     const error = [...document.querySelectorAll(".login-error")].find(shown);
+    // Where a page of Angular Material shows an error, besides .login-error: what the
+    // driver has to look at to tell a refused login, once one of them is seen
+    const alerts = "[role=alert], [aria-live], mat-error, .mat-mdc-form-field-error, " +
+      ".mat-mdc-snack-bar-container, mat-snack-bar-container, .login-error";
     return JSON.stringify({
       path: location.pathname,
       forms: document.forms.length,
@@ -92,6 +104,14 @@ defmodule Mix.Tasks.Bank.Probe do
         .filter(shown)
         .slice(0, 80)
         .map(describe),
+      alerts: [...document.querySelectorAll(alerts)]
+        .filter((element) => shown(element) && element.innerText.trim() !== "")
+        .slice(0, 10)
+        .map((element) => ({
+          ...describe(element),
+          role: cut(element.getAttribute("role")),
+          text: cut(element.innerText.trim()),
+        })),
       login_error: error ? cut(error.innerText.trim()) : null,
     });
   })()
@@ -105,9 +125,10 @@ defmodule Mix.Tasks.Bank.Probe do
 
     say("""
     This looks at the login page of myAlpha and tries one login. It prints structure only:
-    tags, ids, names, placeholders, the path of the address and the text of the element
-    .login-error. It prints no value, no cookie and no other text of the page, and it
-    takes no screenshot.
+    tags, ids, names, placeholders, the path of the address, and the text of .login-error
+    and of the messages the page shows (cut to 80 characters, and not after a login that
+    worked). It prints no value, no cookie and no other text of the page, and it takes no
+    screenshot.
     """)
 
     open_options = [
@@ -157,7 +178,7 @@ defmodule Mix.Tasks.Bank.Probe do
     say("\nBefore the login:")
     page = ok!(Driver.login_page(session), "The login page could not be opened")
 
-    # The form is drawn by AngularJS, some time after the page is there. A page without it
+    # The form is drawn by Angular, some time after the page is there. A page without it
     # is what a probe is for, so it is shown all the same
     with {:error, reason} <- Driver.await_login_form(session, page) do
       say("The login form did not show up (#{inspect(reason)}). This is what is on the page:")
@@ -172,9 +193,13 @@ defmodule Mix.Tasks.Bank.Probe do
     say("The result of the login: #{inspect(result)}")
 
     while_logged_in(result, fn -> log_out(session) end, fn ->
-      seconds = Keyword.get(opts, :wait, @default_wait)
-      say("Waiting #{seconds} seconds.")
-      Process.sleep(:timer.seconds(seconds))
+      # Only a login that worked has a page that is still changing. After a refusal the
+      # page is read at once, while it still shows why
+      if result == :ok do
+        seconds = Keyword.get(opts, :wait, @default_wait)
+        say("Waiting #{seconds} seconds.")
+        Process.sleep(:timer.seconds(seconds))
+      end
 
       say("\nAfter the login:")
       page = ok!(Driver.current_page(session), "The page is gone")
@@ -216,25 +241,33 @@ defmodule Mix.Tasks.Bank.Probe do
   end
 
   defp finish(session, page, result) do
-    snapshot = show(session, page, true)
+    show(session, page, true)
 
-    if undecided?(result, snapshot) do
-      say("""
-
-      The bank neither accepted the login nor refused it: the page is waiting for something.
-      What is listed above is what it shows. If it asks for a code or an answer, this is
-      the second step that the driver has to learn.
-      """)
-    end
+    if message = outcome_message(result), do: say(message)
   end
 
-  # No result, or the login pages are still shown and say nothing about why
-  defp undecided?({:error, :timeout}, _snapshot), do: true
+  @doc false
+  def outcome_message({:error, :timeout}) do
+    """
 
-  defp undecided?(_result, %{"path" => path, "login_error" => nil}) when is_binary(path),
-    do: String.contains?(path, "/auth/")
+    The login was sent, and the bank's answer was not recognised in two minutes: the page
+    is waiting for something, or it refused the login somewhere else than .login-error.
+    It may count as a failed login. Read what the page shows before logging in again.
+    If it asks for a code or an answer, this is the second step that the driver has to learn.
+    """
+  end
 
-  defp undecided?(_result, _snapshot), do: false
+  def outcome_message({:error, reason})
+      when reason in [:no_login_page, :no_login_form, :no_login_button] do
+    """
+
+    Nothing was sent to the bank: the driver gave up before it clicked (#{reason}).
+    The page has changed in a way the driver does not know. What is listed above is what
+    it shows; a button that is listed with `disabled` is one that never became enabled.
+    """
+  end
+
+  def outcome_message(_result), do: nil
 
   # Prints the page and returns what was read, or nil
   defp show(session, page, elements?) do
@@ -272,7 +305,21 @@ defmodule Mix.Tasks.Bank.Probe do
       "  visible inputs, buttons, selects and links: #{length(elements)}"
     ] ++
       if(elements?, do: Enum.map(elements, &element_line/1), else: []) ++
+      if(elements?, do: alert_lines(Map.get(snapshot, "alerts", [])), else: []) ++
       [error_line(snapshot["login_error"])]
+  end
+
+  # The messages the page shows, which is what tells a refused login on a page that does
+  # not use .login-error. They are not listed after a login that worked, as the page of
+  # the bank is no business of the probe then
+  defp alert_lines([]), do: []
+
+  defp alert_lines(alerts) do
+    ["  messages shown (alerts, errors):"] ++
+      for alert <- alerts do
+        role = if is_binary(alert["role"]), do: " role=#{inspect(alert["role"])}", else: ""
+        element_line(alert) <> role <> " text=#{inspect(alert["text"])}"
+      end
   end
 
   defp element_line(element) do
@@ -294,13 +341,15 @@ defmodule Mix.Tasks.Bank.Probe do
         _none -> []
       end
 
-    "    " <> Enum.join([element["tag"] | attributes ++ classes], " ")
+    disabled = if element["disabled"] == true, do: ["disabled"], else: []
+
+    "    " <> Enum.join([element["tag"] | attributes ++ classes ++ disabled], " ")
   end
 
   defp error_line(nil), do: "  .login-error: none is shown"
 
   defp error_line(text),
-    do: "  .login-error (the one text of the page that is printed): #{inspect(text)}"
+    do: "  .login-error: #{inspect(text)}"
 
   defp ok!({:ok, value}, _message), do: value
   defp ok!({:error, reason}, message), do: Mix.raise("#{message}: #{inspect(reason)}.")
@@ -318,89 +367,11 @@ defmodule Mix.Tasks.Bank.Probe do
   end
 
   @doc false
-  # Reads a line from the terminal without showing it. The echo is turned back on whatever
-  # happens, and without a terminal nothing is read.
-  #
-  # The line is read as UTF-8: `IO.gets/1` decodes by the locale of the node, and with
-  # `LANG` and `LC_ALL` unset or `C` it takes the bytes of "ä" for two Latin-1 characters
-  # and returns two others, which is still valid UTF-8, so nothing would notice and the
-  # wrong password would be typed into the bank. The encoding of the device is what is
-  # changed (`IO.binread/2` is not the way: in a UTF-8 locale it fails), and put back
+  # Reads a line from the terminal without showing it, see IkeEmails.Terminal
   def prompt_secret(prompt) do
-    check_shell!(IEx.started?())
-
-    if stty("-echo") != 0,
-      do: Mix.raise("This needs a terminal to ask for the user name and the password.")
-
-    encoding = io_encoding()
-
-    line =
-      try do
-        :io.setopts(:standard_io, encoding: :unicode)
-        IO.gets(prompt)
-      after
-        restore_io_encoding(encoding)
-        stty("echo")
-        IO.puts("")
-      end
-
-    typed!(line)
-  end
-
-  @doc false
-  # In IEx the terminal is not the one `stty` is given: the echo stays on, and the password
-  # would be shown as it is typed
-  def check_shell!(false), do: :ok
-
-  def check_shell!(true) do
-    Mix.raise(
-      "mix bank.probe asks for the password and cannot hide it inside iex. " <>
-        "Run it from a plain shell."
-    )
-  end
-
-  @doc false
-  # What `IO.gets/1` returned, as the text that was typed. Nothing of the line is in the
-  # message of an error
-  def typed!(line) when is_binary(line) do
-    if String.valid?(line),
-      do: line |> String.replace(~r/\r?\n\z/, "") |> not_empty!(),
-      else: Mix.raise("What was typed is not valid UTF-8 text.")
-  end
-
-  def typed!({:error, _reason}), do: Mix.raise("What was typed could not be read as text.")
-  def typed!(_eof), do: Mix.raise("Nothing was typed.")
-
-  defp not_empty!(""), do: Mix.raise("Nothing was typed.")
-  defp not_empty!(text), do: text
-
-  defp io_encoding do
-    case :io.getopts(:standard_io) do
-      options when is_list(options) -> Keyword.get(options, :encoding)
-      _unsupported -> nil
-    end
-  end
-
-  defp restore_io_encoding(nil), do: :ok
-  defp restore_io_encoding(encoding), do: :io.setopts(:standard_io, encoding: encoding)
-
-  # The terminal that the node was started from: the program has to be given its input and
-  # its output as they are (`:nouse_stdio`). Run by `System.cmd/3` it gets pipes instead,
-  # and a port does not give it a terminal of its own either, so `/dev/tty` cannot be
-  # opened. The setting is one of two words, written in the code, and never from outside
-  defp stty(setting) do
-    case System.find_executable("stty") do
-      nil ->
-        1
-
-      stty ->
-        port = Port.open({:spawn_executable, stty}, [:nouse_stdio, :exit_status, args: [setting]])
-
-        receive do
-          {^port, {:exit_status, status}} -> status
-        after
-          :timer.seconds(5) -> 1
-        end
+    case IkeEmails.Terminal.read_secret(prompt) do
+      {:ok, text} -> text
+      {:error, reason} -> Mix.raise(IkeEmails.Terminal.message(reason))
     end
   end
 

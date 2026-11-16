@@ -1,9 +1,10 @@
 defmodule IkeEmails.Accounts do
   @moduledoc """
   The users. There is no sign-up: they are created with `mix user.create`, or
-  `IkeEmails.Release.create_user/2` in production.
+  `IkeEmails.Release.create_user/1` in production.
   """
 
+  alias IkeEmails.Accounts.LoginThrottle
   alias IkeEmails.Accounts.User
   alias IkeEmails.Repo
 
@@ -25,24 +26,28 @@ defmodule IkeEmails.Accounts do
   def get_user!(id), do: Repo.get!(User, id)
 
   @doc """
-  The user with that email and password, or `nil`.
+  The user with that email and password, or `nil`. It is `nil` also while the user is
+  locked out for too many wrong passwords, see `IkeEmails.Accounts.LoginThrottle`.
   """
   def get_user_by_email_and_password(email, password)
       when is_binary(email) and is_binary(password) do
     user = Repo.get_by(User, email: email |> String.trim() |> String.downcase())
-    if User.valid_password?(user, password), do: user
+
+    cond do
+      # The time of a check is spent all the same, so that the answer does not tell
+      # that the email is a user's
+      user && LoginThrottle.attempt(user.id) == :locked ->
+        User.valid_password?(nil, password)
+        nil
+
+      User.valid_password?(user, password) ->
+        LoginThrottle.succeeded(user.id)
+        user
+
+      true ->
+        nil
+    end
   end
 
   def get_user_by_email_and_password(_email, _password), do: nil
-
-  @doc """
-  What is wrong with a changeset, as `%{field => [message]}`.
-  """
-  def error_messages(%Ecto.Changeset{} = changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
-      Regex.replace(~r"%{(\w+)}", message, fn _, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
-    end)
-  end
 end

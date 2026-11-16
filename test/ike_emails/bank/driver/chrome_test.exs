@@ -212,7 +212,7 @@ defmodule IkeEmails.Bank.Driver.ChromeTest do
 
       password = "input[type='password']"
       username = "input[placeholder*='username']"
-      button = "button.login-button:not([disabled])"
+      button = "form button[type='submit']:not([disabled])"
 
       assert [
                {"find", %{selector: ^password}},
@@ -273,11 +273,11 @@ defmodule IkeEmails.Bank.Driver.ChromeTest do
       assert length(finds) >= 4
     end
 
-    test "is a timeout when the form never comes, and types nothing" do
+    test "is no_login_form when the form never comes, and types nothing" do
       session = open!(element_timeout: 30)
       Fake.respond(session.chrome, "find", [{:ok, nil}])
 
-      assert Driver.login(session, credentials()) == {:error, :timeout}
+      assert Driver.login(session, credentials()) == {:error, :no_login_form}
       refute Enum.any?(Fake.scripts(session.chrome), &match?({"fill", _args}, &1))
     end
 
@@ -295,6 +295,15 @@ defmodule IkeEmails.Bank.Driver.ChromeTest do
 
       outcomes = for {"outcome", _args} <- Fake.scripts(session.chrome), do: :outcome
       assert length(outcomes) == 4
+    end
+
+    test "is no_login_button when the button never becomes enabled, and clicks nothing" do
+      session = open!(element_timeout: 30)
+      # The form is there, the enabled button never is
+      Fake.respond(session.chrome, "find", [{:ok, %{object_id: "form"}}, {:ok, nil}])
+
+      assert Driver.login(session, credentials()) == {:error, :no_login_button}
+      refute Enum.any?(Fake.scripts(session.chrome), &match?({"click", _args}, &1))
     end
 
     test "is a timeout when the bank does not answer in time" do
@@ -371,11 +380,11 @@ defmodule IkeEmails.Bank.Driver.ChromeTest do
       assert [{"find", _args} | _] = Fake.scripts(session.chrome)
     end
 
-    test "is a timeout when the bank does not answer the request for the login page" do
+    test "is no_login_page when the bank does not answer the request for the login page" do
       session = open!()
       Fake.respond(session.chrome, "navigate", [{:error, :timeout}])
 
-      assert Driver.login(session, credentials()) == {:error, :timeout}
+      assert Driver.login(session, credentials()) == {:error, :no_login_page}
       assert Fake.scripts(session.chrome) == []
     end
 

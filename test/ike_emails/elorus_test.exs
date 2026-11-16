@@ -85,7 +85,6 @@ defmodule IkeEmails.ElorusTest do
 
       assert Elorus.list_invoices(credentials) == {:error, :not_configured}
       assert Elorus.list_all_invoices(credentials) == {:error, :not_configured}
-      assert Elorus.get_invoice(credentials, "1") == {:error, :not_configured}
       assert Elorus.invoice_pdf(credentials, "1") == {:error, :not_configured}
     end
   end
@@ -110,7 +109,7 @@ defmodule IkeEmails.ElorusTest do
 
       assert {:ok, _} = Elorus.list_invoices(@credentials)
       assert {:ok, _} = Elorus.list_invoices(other)
-      assert {:ok, _} = Elorus.get_invoice(other, "7")
+      assert {:ok, _} = Elorus.list_invoices(other)
 
       assert_received {:request, first}
       assert_received {:request, second}
@@ -154,25 +153,19 @@ defmodule IkeEmails.ElorusTest do
       assert %Invoice{
                id: "1050000300010040",
                status: "paid",
-               draft: false,
                representation: "Invoice #A-1",
                number: "1",
                sequence_flat: "A-",
                date: ~D[2026-10-25],
-               due_date: ~D[2026-11-25],
-               client_id: "3300000040000100",
                client_name: "Acme Inc.",
                client_vat_number: "123451234",
                currency_code: "EUR",
                permalink: "https://app.elorus.com/p/abc/"
              } = first
 
-      assert Decimal.equal?(first.net, "80.00")
       assert Decimal.equal?(first.total, "100.00")
       assert Decimal.equal?(first.payable, "100.00")
-      assert Decimal.equal?(first.paid, "100.00")
       assert Decimal.equal?(second.total, "12.50")
-      assert first.raw["id"] == "1050000300010040"
     end
 
     test "makes the public link of the invoice a full URL" do
@@ -255,7 +248,6 @@ defmodule IkeEmails.ElorusTest do
 
       assert %Invoice{
                date: nil,
-               due_date: nil,
                total: nil,
                number: nil,
                client_vat_number: nil,
@@ -279,14 +271,6 @@ defmodule IkeEmails.ElorusTest do
 
       Req.Test.stub(Elorus, fn conn -> Plug.Conn.send_resp(conn, 200, "") end)
       assert Elorus.list_invoices(@credentials) == {:error, :invalid_response}
-    end
-
-    test "is an error for a single invoice too" do
-      Req.Test.stub(Elorus, fn conn -> Req.Test.json(conn, [1, 2]) end)
-      assert Elorus.get_invoice(@credentials, "1") == {:error, :invalid_response}
-
-      Req.Test.stub(Elorus, fn conn -> Plug.Conn.send_resp(conn, 200, "<html></html>") end)
-      assert Elorus.get_invoice(@credentials, "1") == {:error, :invalid_response}
     end
   end
 
@@ -350,37 +334,6 @@ defmodule IkeEmails.ElorusTest do
     end
   end
 
-  describe "get_invoice/2" do
-    test "returns the invoice" do
-      stub_json(invoice_json(%{"items" => [%{"title" => "Consulting"}]}))
-
-      assert {:ok, %Invoice{id: "1050000300010040", raw: %{"items" => [_]}}} =
-               Elorus.get_invoice(@credentials, "1050000300010040")
-
-      assert_received {:request, conn}
-      assert conn.request_path == "/v1.2/invoices/1050000300010040/"
-    end
-
-    test "refuses an id that is not a plain id, without a request" do
-      Req.Test.stub(Elorus, fn _conn -> flunk("no request should be made") end)
-
-      for id <- ["", ".", "..", "1/../2", "1?x=1", "1#x", "a b", "1\n", "../pdf"] do
-        assert Elorus.get_invoice(@credentials, id) == {:error, :invalid_id}
-        assert Elorus.invoice_pdf(@credentials, id) == {:error, :invalid_id}
-      end
-    end
-
-    test "takes the ids Elorus uses" do
-      stub_json(invoice_json())
-
-      for id <- ["1050000300010040", "abc_DEF-12"] do
-        assert {:ok, _} = Elorus.get_invoice(@credentials, id)
-        assert_received {:request, conn}
-        assert conn.request_path == "/v1.2/invoices/#{id}/"
-      end
-    end
-  end
-
   describe "invoice_pdf/2" do
     @pdf "%PDF-1.4\n" <> <<0, 255, 128>> <> "\n%%EOF"
 
@@ -405,6 +358,24 @@ defmodule IkeEmails.ElorusTest do
       assert conn.request_path == "/v1.2/invoices/1050000300010040/pdf/"
       assert header(conn, "authorization") == "Token test-elorus-token"
       assert header(conn, "x-elorus-organization") == "1000000243015421"
+    end
+
+    test "refuses an id that is not a plain id, without a request" do
+      Req.Test.stub(Elorus, fn _conn -> flunk("no request should be made") end)
+
+      for id <- ["", ".", "..", "1/../2", "1?x=1", "1#x", "a b", "1\n", "../pdf"] do
+        assert Elorus.invoice_pdf(@credentials, id) == {:error, :invalid_id}
+      end
+    end
+
+    test "takes the ids Elorus uses" do
+      stub_pdf()
+
+      for id <- ["1050000300010040", "abc_DEF-12"] do
+        assert {:ok, _} = Elorus.invoice_pdf(@credentials, id)
+        assert_received {:request, conn}
+        assert conn.request_path == "/v1.2/invoices/#{id}/pdf/"
+      end
     end
 
     test "refuses what is not a PDF" do
@@ -440,17 +411,17 @@ defmodule IkeEmails.ElorusTest do
   describe "errors" do
     test "a refused API key" do
       stub_json(%{"detail" => "Invalid token."}, 401)
-      assert Elorus.get_invoice(@credentials, "1") == {:error, :unauthorized}
+      assert Elorus.invoice_pdf(@credentials, "1") == {:error, :unauthorized}
     end
 
     test "a forbidden action" do
       stub_json(%{"detail" => "You do not have permission."}, 403)
-      assert Elorus.get_invoice(@credentials, "1") == {:error, :forbidden}
+      assert Elorus.invoice_pdf(@credentials, "1") == {:error, :forbidden}
     end
 
     test "an unknown invoice" do
       stub_json(%{"detail" => "Not found."}, 404)
-      assert Elorus.get_invoice(@credentials, "1") == {:error, :not_found}
+      assert Elorus.invoice_pdf(@credentials, "1") == {:error, :not_found}
     end
 
     test "a validation error comes back with its body" do
@@ -598,10 +569,10 @@ defmodule IkeEmails.ElorusTest do
 
       log =
         ExUnit.CaptureLog.capture_log([level: :debug], fn ->
-          Elorus.get_invoice(@credentials, "1")
+          Elorus.invoice_pdf(@credentials, "1")
         end)
 
-      assert log =~ ~r{Elorus GET /v1\.2/invoices/1/ failed: .*\(\d+ ms\)}
+      assert log =~ ~r{Elorus GET /v1\.2/invoices/1/pdf/ failed: .*\(\d+ ms\)}
     end
 
     test "the API key stays out of every kind of error, and of the log" do

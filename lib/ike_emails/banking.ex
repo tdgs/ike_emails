@@ -84,21 +84,26 @@ defmodule IkeEmails.Banking do
   end
 
   @doc """
-  Counts the transactions per status, and the total of the missing ones in cents.
+  Counts the transactions per status, the total of the missing ones in cents, and
+  `paid_reconciled`: the payments (money out) that are invoiced or exempt. Money in can
+  be invoiced or exempt too, so the payments that are done are not those two counts.
   """
   def month_summary(transactions) do
-    base = %{invoiced: 0, exempt: 0, missing: 0, income: 0, missing_cents: 0}
+    base = %{invoiced: 0, exempt: 0, missing: 0, income: 0, missing_cents: 0, paid_reconciled: 0}
 
     Enum.reduce(transactions, base, fn transaction, summary ->
       status = status(transaction)
       summary = Map.update!(summary, status, &(&1 + 1))
 
-      case status do
-        :missing ->
+      cond do
+        status == :missing ->
           cents = transaction.amount |> IkeEmails.Money.cents_from_decimal() |> abs()
           Map.update!(summary, :missing_cents, &(&1 + cents))
 
-        _ ->
+        status in [:invoiced, :exempt] and Decimal.negative?(transaction.amount) ->
+          Map.update!(summary, :paid_reconciled, &(&1 + 1))
+
+        true ->
           summary
       end
     end)

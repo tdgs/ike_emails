@@ -76,8 +76,7 @@ defmodule IkeEmails.Chrome do
   ## Options of `start_link/1`
 
   `IkeEmails.Chrome.Launcher` has them: `:user_data_dir` (required), `:chrome_path`,
-  `:headless`, `:lang`, `:no_sandbox`, `:extra_args` and `:home`. Besides, `:name`
-  registers the process.
+  `:headless`, `:lang`, `:no_sandbox` and `:extra_args`.
   """
 
   use GenServer, restart: :temporary
@@ -112,7 +111,7 @@ defmodule IkeEmails.Chrome do
           {:ok, pid()} | {:error, :chrome_not_found | :user_data_dir_required}
   def start_link(opts) do
     with {:ok, command} <- Launcher.command(opts) do
-      GenServer.start_link(__MODULE__, command, Keyword.take(opts, [:name]))
+      GenServer.start_link(__MODULE__, command)
     end
   end
 
@@ -342,23 +341,6 @@ defmodule IkeEmails.Chrome do
              evaluation.timeout
            ) do
       Reply.evaluation(result)
-    end
-  end
-
-  @doc """
-  The PNG of the page, as a binary. Options: `:timeout`.
-  """
-  @spec screenshot(chrome(), Page.t(), keyword()) :: {:ok, binary()} | {:error, term()}
-  def screenshot(chrome, %Page{} = page, opts \\ []) do
-    opts = Keyword.put(opts, :session, page)
-
-    with {:ok, %{"data" => data}} <-
-           call(chrome, "Page.captureScreenshot", %{format: "png"}, opts),
-         {:ok, png} <- Base.decode64(data) do
-      {:ok, png}
-    else
-      {:error, _reason} = error -> error
-      _unexpected -> {:error, :bad_reply}
     end
   end
 

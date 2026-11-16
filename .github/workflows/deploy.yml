@@ -42,7 +42,6 @@ jobs:
       SECRET_KEY_BASE: ${{ secrets.SECRET_KEY_BASE }}
       SETTINGS_ENCRYPTION_KEY: ${{ secrets.SETTINGS_ENCRYPTION_KEY }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      BANK_API_TOKEN: ${{ secrets.BANK_API_TOKEN }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -64,7 +63,7 @@ jobs:
         run: |
           missing=0
           for name in DEPLOY_HOST APP_HOST DEPLOY_SSH_KEY SSH_KNOWN_HOSTS SECRET_KEY_BASE \
-            SETTINGS_ENCRYPTION_KEY POSTGRES_PASSWORD BANK_API_TOKEN AWS_ACCESS_KEY_ID \
+            SETTINGS_ENCRYPTION_KEY POSTGRES_PASSWORD AWS_ACCESS_KEY_ID \
             AWS_SECRET_ACCESS_KEY ANTHROPIC_API_KEY SENTRY_DSN; do
             if [ -z "${!name}" ]; then
               echo "::error::$name is not set in the production environment"

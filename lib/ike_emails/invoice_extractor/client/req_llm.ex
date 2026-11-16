@@ -24,9 +24,12 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLM do
       ])
     ]
 
+    # No retries: ReqLLM retries 3 times by default, so one answer slower than the
+    # timeout would be sent, and paid for, four times
     options = [
       max_tokens: @max_tokens,
       receive_timeout: @receive_timeout,
+      max_retries: 0,
       req_http_options: http_options()
     ]
 
@@ -141,6 +144,11 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLM do
 
   defp reason(%ReqLLM.Error.API.Request{status: 429}), do: :rate_limited
   defp reason(%ReqLLM.Error.API.Timeout{}), do: :timeout
+
+  # A receive timeout comes from Req as a transport error inside the error of the request
+  defp reason(%ReqLLM.Error.API.Request{cause: %Req.TransportError{reason: :timeout}}),
+    do: :timeout
+
   defp reason(%ReqLLM.Error.API.SchemaValidation{}), do: :invalid_response
   defp reason(%ReqLLM.Error.API.JSONDecode{}), do: :invalid_response
   defp reason(%ReqLLM.Error.API.Response{}), do: :invalid_response

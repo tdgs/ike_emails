@@ -1,8 +1,12 @@
 defmodule IkeEmailsWeb.UserAuth do
   @moduledoc """
-  Who is logged in. The session holds the id of the user, and every page that is
-  not the login needs one: the user is in `current_scope` of the conn and of the
-  socket.
+  Who is logged in. The session holds the id of the user and when they logged in, and
+  every page that is not the login needs one: the user is in `current_scope` of the
+  conn and of the socket.
+
+  A session is good for 14 days from the login. The cookie is signed and the server
+  keeps nothing of it, so without that a copy of it would work for as long as the
+  `SECRET_KEY_BASE` stays the same, logout or not.
   """
 
   use IkeEmailsWeb, :verified_routes
@@ -14,6 +18,8 @@ defmodule IkeEmailsWeb.UserAuth do
   alias IkeEmails.Accounts.Scope
   alias IkeEmails.Elorus.Connection
 
+  @max_age_seconds 14 * 24 * 60 * 60
+
   @doc """
   Logs the user in: a new session, so that one from before the login (or
   someone else's) is not reused, and on to the page that was asked for.
@@ -24,6 +30,7 @@ defmodule IkeEmailsWeb.UserAuth do
     conn
     |> renew_session()
     |> put_session(:user_id, user.id)
+    |> put_session(:logged_in_at, System.system_time(:second))
     |> put_session(:live_socket_id, live_socket_id(user))
     |> redirect(to: user_return_to || ~p"/")
   end
@@ -79,8 +86,12 @@ defmodule IkeEmailsWeb.UserAuth do
 
   def put_sentry_user(nil), do: Sentry.Context.set_user_context(%{id: nil})
 
-  defp scope_from_session(%{"user_id" => user_id}) do
-    user_id |> Accounts.get_user() |> Scope.for_user()
+  # A session from before logged_in_at was kept has none, and is logged out once
+  defp scope_from_session(%{"user_id" => user_id, "logged_in_at" => logged_in_at})
+       when is_integer(logged_in_at) do
+    if System.system_time(:second) - logged_in_at < @max_age_seconds do
+      user_id |> Accounts.get_user() |> Scope.for_user()
+    end
   end
 
   defp scope_from_session(_session), do: nil

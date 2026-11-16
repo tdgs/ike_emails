@@ -100,11 +100,12 @@ defmodule IkeEmails.BankLoginPage do
         <form id="first-form" style="display: none">
           <input type="text" placeholder="Enter your username" id="hidden-user">
           <input type="password" id="hidden-pass">
+          <button type="submit" id="hidden-submit">Log in</button>
         </form>
         <form id="login-form">
           <input type="text" id="user" name="user" class="form-control" placeholder="Enter your username">
           <input type="password" id="pass" name="pass" class="form-control" placeholder="Password">
-          <button type="button" class="login-button btn" disabled>Log in</button>
+          <button type="submit" class="primary-btn login-form-btn" disabled>Log in</button>
           <div class="login-error" style="display: none"></div>
         </form>
         <a href="/somewhere">A link</a>
@@ -113,13 +114,15 @@ defmodule IkeEmails.BankLoginPage do
           localStorage.setItem("remembered", "#{@stored_head}" + "#{@stored_tail}");
           const user = document.querySelector("#user");
           const pass = document.querySelector("#pass");
-          const button = document.querySelector(".login-button");
+          const button = document.querySelector("#login-form button[type='submit']");
           const error = document.querySelector(".login-error");
           const update = () => { button.disabled = !(user.value && pass.value); };
           const fail = (text) => { error.textContent = text; error.style.display = "block"; };
           user.addEventListener("input", update);
           pass.addEventListener("input", update);
-          button.addEventListener("click", () => {
+          button.addEventListener("click", (event) => {
+            // As the page of the bank: the form is never sent, which would put its fields in the address
+            event.preventDefault();
             if (user.value === "stuck") return;
             if (user.value === "in-use") return fail("Ο λογαριασμός σας χρησιμοποιείται ήδη, ίσως από άλλον υπολογιστή.");
             if (pass.value === "right-password") location.href = "/myAlphaWeb/business/app/home";
