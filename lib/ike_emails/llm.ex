@@ -75,6 +75,13 @@ defmodule IkeEmails.LLM do
     if message =~ "api_key", do: :missing_key, else: {:failed, message}
   end
 
+  # ReqLLM answers with an atom for a model string it cannot use, such as
+  # :unknown_provider
+  def reason(error) when not is_exception(error) do
+    Logger.warning("A call to the language model failed: #{inspect(error)}")
+    {:failed, inspect(error)}
+  end
+
   def reason(error) do
     message = Exception.message(error)
     Logger.warning("A call to the language model failed: #{message}")

@@ -6,6 +6,7 @@ defmodule IkeEmailsWeb.MonthCloseLiveTest do
   import IkeEmails.Fixtures
   import Phoenix.LiveViewTest
 
+  alias IkeEmails.ElorusStub
   alias IkeEmails.LLMStub
   alias IkeEmails.MonthClose
   alias IkeEmails.MonthClose.Proposal
@@ -109,5 +110,48 @@ defmodule IkeEmailsWeb.MonthCloseLiveTest do
     {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
 
     assert has_element?(view, "#proposal-#{transaction.id}")
+  end
+
+  defp elorus_proposal(scope) do
+    transaction = transaction_fixture(scope, %{"amount" => "100.00"})
+
+    {:ok, proposal} =
+      MonthClose.put_proposal(scope, transaction, %{elorus_invoice: ElorusStub.invoice_json()}, %{
+        "kind" => "import_elorus",
+        "rationale" => "The amount and the client fit."
+      })
+
+    {transaction, proposal}
+  end
+
+  describe "approving an invoice of Elorus" do
+    setup :configure_settings
+
+    test "imports it", %{conn: conn, scope: scope} do
+      ElorusStub.stub()
+      {transaction, proposal} = elorus_proposal(scope)
+      {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
+
+      assert has_element?(view, "#proposal-#{transaction.id}[data-kind=import_elorus]")
+      view |> element("#approve-proposal-#{proposal.id}") |> render_click()
+
+      wait_for(view, "#transactions-#{transaction.id}[data-status=invoiced]")
+      refute has_element?(view, "#proposal-#{transaction.id}")
+    end
+  end
+
+  describe "approving an invoice of Elorus while it is locked" do
+    test "says what to do, and keeps the proposal", %{conn: conn, scope: scope} do
+      settings_fixture(scope)
+      {transaction, proposal} = elorus_proposal(scope)
+      {:ok, view, _html} = live(conn, ~p"/?month=2026-10")
+
+      view |> element("#approve-proposal-#{proposal.id}") |> render_click()
+
+      wait_for(view, "#flash-error")
+      assert render(view) =~ "Unlock Elorus first"
+      assert has_element?(view, "#proposal-#{transaction.id}")
+      assert has_element?(view, "#transactions-#{transaction.id}[data-status=income]")
+    end
   end
 end

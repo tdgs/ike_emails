@@ -33,37 +33,60 @@ defmodule IkeEmails.MonthClose do
 
   @doc """
   Runs the agent for the open transactions of the month of the user: the ones
-  with no invoice that are not marked as needing none. The proposals they had are
-  dropped first.
+  with no invoice that are not marked as needing none. What it proposes replaces
+  the proposals of the month. A run that fails leaves the ones it did not replace.
+  The proposals to import from Elorus are also left while Elorus is locked, as
+  they cannot be made again.
 
   Elorus is searched only when the user has unlocked it. Returns
   `{:ok, %{proposed: count, elorus_skipped?: boolean}}`, where `elorus_skipped?`
   tells that there was income, and Elorus is set up but locked. Or
-  `{:error, reason}`: `:not_configured`, or what `IkeEmails.LLM.reason/1` returns,
-  and then the proposals made before the error stay.
+  `{:error, reason}`: `:not_configured`, `:already_running` (a run of the month is
+  going), what `IkeEmails.MonthClose.Agent.run/4` returns, or what
+  `IkeEmails.LLM.reason/1` returns.
   """
   def run(%Scope{} = scope, %Date{} = month) do
+    month = Date.beginning_of_month(month)
+
     if configured?() do
-      open =
-        scope
-        |> Banking.list_transactions_for_month(month.year, month.month)
-        |> Enum.filter(&(Banking.status(&1) in [:missing, :income]))
+      # A second run of the month, from another tab or after a reload, would pay for
+      # the same answers. The lock is held by the process of the run, and goes with it
+      lock = {{:month_close, Scope.user_id(scope), month}, self()}
 
-      ids = Enum.map(open, & &1.id)
-      Repo.delete_all(from p in Proposal, where: p.transaction_id in ^ids)
-
-      unlocked? = Elorus.Connection.unlocked?(scope)
-
-      skipped? =
-        not unlocked? and Settings.elorus_configured?(scope) and
-          Enum.any?(open, &Decimal.positive?(&1.amount))
-
-      with {:ok, proposed} <- run_agent(scope, month, open, unlocked?) do
-        {:ok, %{proposed: length(proposed), elorus_skipped?: skipped?}}
+      case :global.trans(lock, fn -> run_month(scope, month) end, [node()], 0) do
+        :aborted -> {:error, :already_running}
+        result -> result
       end
     else
       {:error, :not_configured}
     end
+  end
+
+  defp run_month(scope, month) do
+    transactions = Banking.list_transactions_for_month(scope, month.year, month.month)
+    open = Enum.filter(transactions, &(Banking.status(&1) in [:missing, :income]))
+    unlocked? = Elorus.Connection.unlocked?(scope)
+
+    skipped? =
+      not unlocked? and Settings.elorus_configured?(scope) and
+        Enum.any?(open, &Decimal.positive?(&1.amount))
+
+    with {:ok, proposed} <- run_agent(scope, month, open, unlocked?) do
+      drop_unproposed(transactions, proposed, unlocked?)
+      {:ok, %{proposed: length(proposed), elorus_skipped?: skipped?}}
+    end
+  end
+
+  # What the run did not propose again is gone: the proposals of the transactions
+  # that are settled now as well
+  defp drop_unproposed(transactions, proposed, unlocked?) do
+    ids = Enum.map(transactions, & &1.id) -- proposed
+
+    Repo.delete_all(
+      from p in Proposal,
+        where: p.transaction_id in ^ids,
+        where: type(^unlocked?, :boolean) or p.kind != :import_elorus
+    )
   end
 
   defp run_agent(_scope, _month, [], _elorus?), do: {:ok, []}
@@ -80,7 +103,9 @@ defmodule IkeEmails.MonthClose do
     |> struct!(target)
     |> Proposal.changeset(attrs)
     |> Repo.insert(
-      on_conflict: {:replace_all_except, [:id, :inserted_at]},
+      # The new proposal has an id of its own, so that an Approve of the one that is
+      # replaced, from a page that still shows it, finds nothing
+      on_conflict: {:replace_all_except, [:inserted_at]},
       conflict_target: :transaction_id
     )
   end

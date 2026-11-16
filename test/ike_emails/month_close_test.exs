@@ -29,6 +29,15 @@ defmodule IkeEmails.MonthCloseTest do
     end
   end
 
+  # The requests to Elorus that the run made, as the stub sends them to the test
+  defp elorus_requests(count \\ 0) do
+    receive do
+      {:elorus_request, _conn} -> elorus_requests(count + 1)
+    after
+      0 -> count
+    end
+  end
+
   defp propose(transaction, arguments) do
     {"propose",
      Map.merge(%{"transaction_id" => transaction.id, "rationale" => "It fits."}, arguments)}
@@ -141,15 +150,39 @@ defmodule IkeEmails.MonthCloseTest do
       assert proposal(transaction) == nil
     end
 
-    test "stops when the model keeps asking for tools", %{scope: scope} do
+    test "says it was not done when the model keeps asking for tools, and keeps what it found",
+         %{scope: scope} do
       transaction = transaction_fixture(scope)
 
       LLMStub.script([
+        LLMStub.tool_use([propose(transaction, %{"kind" => "no_invoice", "note" => "bank fee"})]),
         LLMStub.tool_use([{"find_invoices", %{"transaction_id" => transaction.id}}])
       ])
 
-      assert {:ok, %{proposed: 0}} = MonthClose.run(scope, @month)
+      assert MonthClose.run(scope, @month) == {:error, :too_many_steps}
       assert length(requests()) == 25
+      assert %Proposal{} = proposal(transaction)
+    end
+
+    test "drops the proposal of a transaction that is settled by hand", %{scope: scope} do
+      attached = transaction_fixture(scope)
+      exempt = transaction_fixture(scope)
+
+      LLMStub.script([
+        LLMStub.tool_use([
+          propose(attached, %{"kind" => "no_invoice"}),
+          propose(exempt, %{"kind" => "no_invoice"})
+        ]),
+        LLMStub.text()
+      ])
+
+      assert {:ok, %{proposed: 2}} = MonthClose.run(scope, @month)
+
+      :ok = Invoicing.attach(scope, invoice_fixture(scope), attached)
+      {:ok, _} = Banking.mark_no_invoice(scope, Banking.get_transaction!(scope, exempt.id), "tax")
+
+      assert proposal(attached) == nil
+      assert proposal(exempt) == nil
     end
 
     test "drops the proposals of the run before", %{scope: scope} do
@@ -190,6 +223,80 @@ defmodule IkeEmails.MonthCloseTest do
 
       assert MonthClose.run(scope, @month) == {:error, :unauthorized}
       assert %Proposal{} = proposal(transaction)
+    end
+
+    test "does not call an answer that was cut off done", %{scope: scope} do
+      transaction_fixture(scope)
+      LLMStub.script([LLMStub.cut_off()])
+
+      assert MonthClose.run(scope, @month) == {:error, :cut_off}
+    end
+
+    test "takes an id typed as text or as a float", %{scope: scope} do
+      by_text = transaction_fixture(scope)
+      by_float = transaction_fixture(scope)
+
+      LLMStub.script([
+        LLMStub.tool_use([
+          propose(%{id: Integer.to_string(by_text.id)}, %{"kind" => "no_invoice"}),
+          propose(%{id: by_float.id * 1.0}, %{"kind" => "no_invoice"})
+        ]),
+        LLMStub.text()
+      ])
+
+      assert {:ok, %{proposed: 2}} = MonthClose.run(scope, @month)
+      assert %Proposal{} = proposal(by_text)
+      assert %Proposal{} = proposal(by_float)
+    end
+
+    test "leaves the proposals it did not replace when it fails", %{scope: scope} do
+      transaction = transaction_fixture(scope)
+
+      {:ok, _} =
+        MonthClose.put_proposal(scope, transaction, %{}, %{
+          "kind" => "no_invoice",
+          "rationale" => "It is a commission of the bank."
+        })
+
+      LLMStub.script([
+        {401, %{"type" => "error", "error" => %{"type" => "authentication_error"}}}
+      ])
+
+      assert MonthClose.run(scope, @month) == {:error, :unauthorized}
+      assert %Proposal{} = proposal(transaction)
+    end
+
+    test "keeps a proposal to import from Elorus while Elorus is locked", %{scope: scope} do
+      settings_fixture(scope)
+      transaction = transaction_fixture(scope, %{"amount" => "100.00"})
+
+      {:ok, _} =
+        MonthClose.put_proposal(
+          scope,
+          transaction,
+          %{elorus_invoice: ElorusStub.invoice_json()},
+          %{
+            "kind" => "import_elorus",
+            "rationale" => "The amount and the client fit."
+          }
+        )
+
+      LLMStub.script([LLMStub.text()])
+
+      assert MonthClose.run(scope, @month) == {:ok, %{proposed: 0, elorus_skipped?: true}}
+      assert %Proposal{kind: :import_elorus} = proposal(transaction)
+    end
+
+    test "refuses a second run of the month while one is going", %{scope: scope} do
+      transaction_fixture(scope)
+      LLMStub.script([LLMStub.text()])
+
+      # The lock of the run that is going, which is held by its process
+      lock = {{:month_close, scope.user.id, @month}, self()}
+      second = fn -> Task.async(fn -> MonthClose.run(scope, @month) end) |> Task.await() end
+
+      assert :global.trans(lock, second, [node()], 0) == {:error, :already_running}
+      assert {:ok, %{proposed: 0}} = MonthClose.run(scope, @month)
     end
 
     test "is off without a model", %{scope: scope} do
@@ -248,6 +355,96 @@ defmodule IkeEmails.MonthCloseTest do
       assert proposal(transaction) == nil
     end
 
+    test "asks Elorus once for a month, whatever the number of transactions", %{scope: scope} do
+      first = transaction_fixture(scope, %{"amount" => "100.00"})
+      second = transaction_fixture(scope, %{"amount" => "100.00"})
+      ElorusStub.stub(invoices: [ElorusStub.invoice_json()])
+
+      LLMStub.script([
+        LLMStub.tool_use([
+          {"search_elorus", %{"transaction_id" => first.id}},
+          {"search_elorus", %{"transaction_id" => second.id}}
+        ]),
+        LLMStub.text()
+      ])
+
+      assert {:ok, %{proposed: 0}} = MonthClose.run(scope, @month)
+
+      assert [_first, answered] = requests()
+
+      assert [{[%{"same_amount" => true}], false}, {[%{"same_amount" => true}], false}] =
+               LLMStub.tool_results(answered)
+
+      assert elorus_requests() == 1
+    end
+
+    test "asks for 3 months of Elorus at most", %{scope: scope} do
+      transaction = transaction_fixture(scope, %{"amount" => "100.00"})
+      ElorusStub.stub()
+
+      months = ~w(2026-10 2026-09 2026-08 2026-07)
+
+      LLMStub.script([
+        LLMStub.tool_use(
+          Enum.map(
+            months,
+            &{"search_elorus", %{"transaction_id" => transaction.id, "month" => &1}}
+          )
+        ),
+        LLMStub.text()
+      ])
+
+      assert {:ok, %{proposed: 0}} = MonthClose.run(scope, @month)
+
+      assert [_first, answered] = requests()
+
+      assert [{_, false}, {_, false}, {_, false}, {%{"error" => _}, true}] =
+               LLMStub.tool_results(answered)
+
+      assert elorus_requests() == 3
+    end
+
+    test "does not ask again for a month that Elorus refused", %{scope: scope} do
+      first = transaction_fixture(scope, %{"amount" => "100.00"})
+      second = transaction_fixture(scope, %{"amount" => "100.00"})
+      ElorusStub.stub(status: 429)
+
+      LLMStub.script([
+        LLMStub.tool_use([
+          {"search_elorus", %{"transaction_id" => first.id}},
+          {"search_elorus", %{"transaction_id" => second.id}}
+        ]),
+        LLMStub.text()
+      ])
+
+      assert {:ok, %{proposed: 0}} = MonthClose.run(scope, @month)
+
+      assert [_first, answered] = requests()
+      assert [{%{"error" => _}, true}, {%{"error" => _}, true}] = LLMStub.tool_results(answered)
+      assert elorus_requests() == 1
+    end
+
+    test "drops a proposal to import from Elorus that it does not make again", %{scope: scope} do
+      transaction = transaction_fixture(scope, %{"amount" => "100.00"})
+      ElorusStub.stub()
+
+      {:ok, _} =
+        MonthClose.put_proposal(
+          scope,
+          transaction,
+          %{elorus_invoice: ElorusStub.invoice_json()},
+          %{
+            "kind" => "import_elorus",
+            "rationale" => "The amount and the client fit."
+          }
+        )
+
+      LLMStub.script([LLMStub.text()])
+
+      assert {:ok, %{proposed: 0}} = MonthClose.run(scope, @month)
+      assert proposal(transaction) == nil
+    end
+
     test "refuses an invoice of Elorus for a payment", %{scope: scope} do
       transaction_fixture(scope, %{"amount" => "100.00"})
       payment = transaction_fixture(scope)
@@ -302,7 +499,7 @@ defmodule IkeEmails.MonthCloseTest do
       assert proposal(transaction) == nil
     end
 
-    test "keep the proposal when the transaction got an invoice meanwhile", %{scope: scope} do
+    test "refuse a proposal that an invoice settled meanwhile, which is dropped", %{scope: scope} do
       transaction = transaction_fixture(scope)
 
       {:ok, proposal} =
@@ -312,10 +509,34 @@ defmodule IkeEmails.MonthCloseTest do
         })
 
       invoice_fixture(scope, %{}, transaction_ids: [transaction.id])
+      assert proposal(transaction) == nil
 
+      # A page that still shows the proposal sends it
       assert MonthClose.approve(scope, proposal) == {:error, :has_invoices}
-      assert %Proposal{} = proposal(transaction)
       refute Banking.get_transaction!(scope, transaction.id).no_invoice
+    end
+
+    test "a replacing proposal has an id of its own, so a stale approval finds nothing", %{
+      scope: scope
+    } do
+      transaction = transaction_fixture(scope)
+
+      {:ok, first} =
+        MonthClose.put_proposal(scope, transaction, %{}, %{
+          "kind" => "no_invoice",
+          "rationale" => "It is a commission of the bank."
+        })
+
+      {:ok, second} =
+        MonthClose.put_proposal(scope, transaction, %{}, %{
+          "kind" => "no_invoice",
+          "note" => "tax",
+          "rationale" => "It is a tax."
+        })
+
+      refute second.id == first.id
+      assert MonthClose.get_proposal(scope, first.id) == nil
+      assert proposal(transaction).id == second.id
     end
 
     test "reject drops the proposal and changes nothing, twice as well", %{scope: scope} do

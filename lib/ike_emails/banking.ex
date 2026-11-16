@@ -7,6 +7,7 @@ defmodule IkeEmails.Banking do
 
   alias IkeEmails.Accounts.Scope
   alias IkeEmails.Banking.Transaction
+  alias IkeEmails.MonthClose.Proposal
   alias IkeEmails.Repo
 
   # The bank books a transfer and its fee under one transaction id, so a
@@ -117,10 +118,15 @@ defmodule IkeEmails.Banking do
   end
 
   def mark_no_invoice(%Scope{} = scope, %Transaction{} = transaction, note) do
-    scope
-    |> Scope.authorize!(transaction)
-    |> Transaction.no_invoice_changeset(%{no_invoice_note: note})
-    |> Repo.update()
+    with {:ok, transaction} <-
+           scope
+           |> Scope.authorize!(transaction)
+           |> Transaction.no_invoice_changeset(%{no_invoice_note: note})
+           |> Repo.update() do
+      # What the month-close agent proposed is settled, whoever did it
+      Repo.delete_all(from p in Proposal, where: p.transaction_id == ^transaction.id)
+      {:ok, transaction}
+    end
   end
 
   @doc """

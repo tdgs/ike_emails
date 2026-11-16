@@ -78,6 +78,11 @@ defmodule IkeEmails.LLMStub do
   """
   def text(text \\ "Done."), do: message([%{"type" => "text", "text" => text}], "end_turn")
 
+  @doc """
+  The model is cut off by the limit of tokens before it is done.
+  """
+  def cut_off, do: message([%{"type" => "text", "text" => "Let me look at"}], "max_tokens")
+
   defp message(content, stop_reason) do
     %{
       "id" => "msg_#{System.unique_integer([:positive])}",

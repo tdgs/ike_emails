@@ -74,7 +74,11 @@ With `AI_MODEL` set, the reconciliation of a month also has "Propose matches"
 still open, among the invoices you have stored and, for income, in Elorus, and leaves a
 proposal on the ones it can settle: attach an invoice, import one from Elorus, or mark
 the transaction as needing no invoice. Nothing changes until you approve a proposal, and
-you can reject it. A new run replaces the proposals of the month. Elorus is searched only
+you can reject it. A new run replaces the proposals of the month; the ones to import from
+Elorus stay while it is locked, and a run that fails leaves the old ones. A run goes on
+when you leave the page and takes a minute or so, and a second run of the same month is
+refused until it ends. It asks Elorus for at most three months. A proposal is dropped when
+you settle its transaction yourself. Elorus is searched only
 while it is unlocked, so unlock it first (in the panel of a transaction that is money in)
 to have proposals for income. A run sends more to the provider than reading a PDF does:
 the open transactions of the month (date, amount, description and the details of the

@@ -23,7 +23,9 @@ config :ike_emails, IkeEmails.InvoiceExtractor,
 
 # The month-close agent calls ReqLLM, and the tests answer its requests, see
 # test/support/llm_stub.ex
-config :ike_emails, IkeEmails.MonthClose, model: "anthropic:claude-sonnet-5-5"
+config :ike_emails, IkeEmails.MonthClose,
+  model: "anthropic:claude-sonnet-5-5",
+  req_http_options: [plug: fn conn -> Plug.Conn.send_resp(conn, 500, "") end, retry: false]
 
 # The bank is answered by a scripted driver, see test/support/bank_driver_stub.ex
 config :ike_emails, IkeEmails.Bank, driver: IkeEmails.BankDriverStub

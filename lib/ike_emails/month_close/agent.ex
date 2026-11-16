@@ -21,18 +21,27 @@ defmodule IkeEmails.MonthClose.Agent do
   alias ReqLLM.Context
 
   @max_steps 25
-  @max_tokens 4096
+  # A step can propose for many transactions at once, and OpenAI counts the
+  # reasoning in it
+  @max_tokens 8192
   @receive_timeout 120_000
   # The most invoices of Elorus shown to the model for a search, matches first
   @max_elorus 50
+  # The months of Elorus a run can ask for: each is a request of its own, and the
+  # model is not trusted to ask for the month of the transactions only
+  @max_elorus_months 3
+  # A reply that ended for one of these did not end because the model was done
+  @not_done [:length, :incomplete, :content_filter, :error, :cancelled]
 
   @doc """
   Runs the agent for the `transactions` (those of `month` that are open) of the
   user. With `elorus?` the model can search Elorus, which must be unlocked.
 
   Returns `{:ok, ids}` with the ids of the transactions that got a proposal, or
-  `{:error, reason}` (see `IkeEmails.LLM.reason/1`) when a call of the model
-  failed: the proposals made until then stay.
+  `{:error, reason}`: `:too_many_steps` when the model was not done after the
+  steps it is given, `:cut_off` when a reply was cut off, `:invalid_response`, or
+  what `IkeEmails.LLM.reason/1` returns when a call of the model failed. The
+  proposals made until then stay.
   """
   def run(scope, %Date{} = month, transactions, elorus?) do
     state = %{
@@ -41,6 +50,8 @@ defmodule IkeEmails.MonthClose.Agent do
       transactions: Map.new(transactions, &{&1.id, &1}),
       invoices: %{},
       elorus: %{},
+      # The invoices of Elorus by month, so that a month is asked for once
+      elorus_months: %{},
       proposed: MapSet.new()
     }
 
@@ -57,9 +68,8 @@ defmodule IkeEmails.MonthClose.Agent do
     end
   end
 
-  # shortcut: a run that is out of steps just ends, and what it did not get to has
-  # no proposal. Raise @max_steps, or run a month in parts, when months grow.
-  defp loop(_model, _context, _tools, state, 0), do: {:ok, state}
+  # Out of steps: the proposals made stay, and the user is told it is not done
+  defp loop(_model, _context, _tools, _state, 0), do: {:error, :too_many_steps}
 
   defp loop(model, context, tools, state, steps) do
     with {:ok, response} <- chat(model, context, tools) do
@@ -73,6 +83,9 @@ defmodule IkeEmails.MonthClose.Agent do
           else
             {:error, _invalid} -> {:error, :invalid_response}
           end
+
+        %{finish_reason: reason} when reason in @not_done ->
+          {:error, :cut_off}
 
         _final_answer ->
           {:ok, state}
@@ -105,18 +118,54 @@ defmodule IkeEmails.MonthClose.Agent do
   defp cache("anthropic"),
     do: [provider_options: [anthropic_prompt_cache: true, anthropic_cache_messages: true]]
 
+  # Without this OpenAI keeps the conversation, and ReqLLM sends it again on top
+  # of it at every step. It would also keep the transactions of the user.
+  defp cache("openai"), do: [provider_options: [store: false]]
+
   defp cache(_provider), do: []
 
   defp call(%{id: id, name: name, arguments: arguments}, state) do
-    case execute(name, arguments, state) do
+    result =
+      if is_map(arguments),
+        do: execute(name, normalize(arguments), state),
+        else: {:error, "The arguments must be an object."}
+
+    case result do
       {:ok, result, state} ->
         {Context.tool_result_message(name, id, Jason.encode!(result)), state}
 
       {:error, message} ->
-        result = Jason.encode!(%{error: message})
-        {Context.tool_result_message(name, id, result, %{is_error: true}), state}
+        {tool_error(name, id, message), state}
+
+      {:error, message, state} ->
+        {tool_error(name, id, message), state}
     end
   end
+
+  defp tool_error(name, id, message) do
+    Context.tool_result_message(name, id, Jason.encode!(%{error: message}), %{is_error: true})
+  end
+
+  # The tools are not strict, so an id can come as "12" or 12.0, and the id of an
+  # invoice of Elorus as a number
+  defp normalize(arguments) do
+    Map.new(arguments, fn
+      {key, value} when key in ["transaction_id", "invoice_id"] -> {key, to_integer(value)}
+      {"elorus_id", value} when is_integer(value) -> {"elorus_id", Integer.to_string(value)}
+      pair -> pair
+    end)
+  end
+
+  defp to_integer(value) when is_float(value) and value == trunc(value), do: trunc(value)
+
+  defp to_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> integer
+      _not_a_number -> value
+    end
+  end
+
+  defp to_integer(value), do: value
 
   ## The tools
 
@@ -222,8 +271,13 @@ defmodule IkeEmails.MonthClose.Agent do
   defp execute("search_elorus", arguments, state) do
     with {:ok, transaction} <- transaction(state, arguments),
          {:ok, month} <- month(arguments["month"], state),
-         {:ok, invoices} <- search_elorus(state.scope, transaction, month) do
-      invoices = Enum.take(invoices, @max_elorus)
+         {:ok, invoices, state} <- elorus_month(state, transaction, month) do
+      # The ones for the amount of this transaction first. The sort is stable
+      invoices =
+        invoices
+        |> Enum.sort_by(&(not Invoicing.elorus_match?(&1, transaction)))
+        |> Enum.take(@max_elorus)
+
       imported = Invoicing.imported_elorus_ids(state.scope, Enum.map(invoices, & &1.id))
 
       found =
@@ -271,6 +325,30 @@ defmodule IkeEmails.MonthClose.Agent do
 
   # The reason is not shown to the model as it is: an error of Elorus can carry
   # what it answered
+  # A month is asked for once, and what Elorus answered, an error as well, is kept
+  defp elorus_month(state, transaction, month) do
+    case state.elorus_months do
+      %{^month => {:ok, invoices}} ->
+        {:ok, invoices, state}
+
+      %{^month => {:error, message}} ->
+        {:error, message}
+
+      months when map_size(months) >= @max_elorus_months ->
+        {:error,
+         "Elorus was searched for #{@max_elorus_months} months already. Do not search more."}
+
+      _not_asked ->
+        answer = search_elorus(state.scope, transaction, month)
+        state = %{state | elorus_months: Map.put(state.elorus_months, month, answer)}
+
+        case answer do
+          {:ok, invoices} -> {:ok, invoices, state}
+          {:error, message} -> {:error, message, state}
+        end
+    end
+  end
+
   defp search_elorus(scope, transaction, month) do
     case Invoicing.search_elorus(scope, transaction, month) do
       {:ok, invoices} ->

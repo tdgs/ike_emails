@@ -340,7 +340,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
           MonthClose.run(scope, month)
         end)
 
-      {:noreply, assign(socket, :month_close_task, task.ref)}
+      {:noreply, assign(socket, :month_close_task, %{ref: task.ref, month: month})}
     else
       {:noreply, socket}
     end
@@ -357,7 +357,9 @@ defmodule IkeEmailsWeb.ReconciliationLive do
       # The PDF is downloaded from Elorus, which takes a while
       %{kind: :import_elorus} = proposal ->
         {:noreply,
-         start_async(socket, :approve_proposal, fn -> MonthClose.approve(scope, proposal) end)}
+         start_async(socket, {:approve_proposal, proposal.id}, fn ->
+           MonthClose.approve(scope, proposal)
+         end)}
 
       proposal ->
         {:noreply, approved(socket, MonthClose.approve(scope, proposal))}
@@ -426,11 +428,11 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     {:noreply, socket |> assign(:elorus_unlocking?, false) |> elorus_unavailable(:crashed)}
   end
 
-  def handle_async(:approve_proposal, {:ok, result}, socket) do
+  def handle_async({:approve_proposal, _id}, {:ok, result}, socket) do
     {:noreply, approved(socket, result)}
   end
 
-  def handle_async(:approve_proposal, {:exit, reason}, socket) do
+  def handle_async({:approve_proposal, _id}, {:exit, reason}, socket) do
     Logger.error("Approving a proposal crashed: #{inspect(reason)}")
     {:noreply, approved(socket, {:error, :crashed})}
   end
@@ -440,12 +442,19 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   defp approved(socket, {:error, :has_invoices}),
     do: socket |> put_flash(:error, "That transaction has invoices.") |> refresh()
 
-  # What is left is an error of attaching or of Elorus, and the proposal stays
+  # The proposal stays after an error
   defp approved(socket, {:error, reason}) do
     socket
-    |> put_flash(:error, "The proposal was not applied. " <> elorus_error_message(reason))
+    |> put_flash(:error, "The proposal was not applied. " <> approve_error_message(reason))
     |> refresh()
   end
+
+  # The panel of a transaction that is money in is where Elorus is unlocked
+  defp approve_error_message(:locked),
+    do: "Unlock Elorus first: open the panel of an income transaction and enter your password."
+
+  defp approve_error_message(%Ecto.Changeset{}), do: "The values cannot be saved."
+  defp approve_error_message(reason), do: elorus_error_message(reason)
 
   defp extract_failed(socket, reason) do
     socket
@@ -514,30 +523,36 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     {:noreply, socket |> assign(:elorus_task, nil) |> elorus_failed(task, :crashed)}
   end
 
-  def handle_info({ref, result}, %{assigns: %{month_close_task: ref}} = socket) do
+  def handle_info({ref, result}, %{assigns: %{month_close_task: %{ref: ref} = task}} = socket) do
     Process.demonitor(ref, [:flush])
-    {:noreply, socket |> assign(:month_close_task, nil) |> month_closed(result) |> refresh()}
+
+    {:noreply,
+     socket |> assign(:month_close_task, nil) |> month_closed(task.month, result) |> refresh()}
   end
 
   def handle_info(
         {:DOWN, ref, :process, _pid, reason},
-        %{assigns: %{month_close_task: ref}} = socket
+        %{assigns: %{month_close_task: %{ref: ref} = task}} = socket
       ) do
     Logger.error("Proposing matches crashed: #{inspect(reason)}")
 
     {:noreply,
-     socket |> assign(:month_close_task, nil) |> month_closed({:error, :crashed}) |> refresh()}
+     socket
+     |> assign(:month_close_task, nil)
+     |> month_closed(task.month, {:error, :crashed})
+     |> refresh()}
   end
 
   # The result of a search whose panel was closed meanwhile
   def handle_info(_message, socket), do: {:noreply, socket}
 
-  defp month_closed(socket, {:ok, %{proposed: count, elorus_skipped?: skipped?}}) do
+  # The month is named, as the one that is open may not be the one of the run
+  defp month_closed(socket, month, {:ok, %{proposed: count, elorus_skipped?: skipped?}}) do
     found =
       case count do
-        0 -> "Nothing could be matched with confidence."
-        1 -> "1 proposal to review."
-        count -> "#{count} proposals to review."
+        0 -> "#{month_title(month)}: nothing could be matched with confidence."
+        1 -> "#{month_title(month)}: 1 proposal to review."
+        count -> "#{month_title(month)}: #{count} proposals to review."
       end
 
     skipped =
@@ -548,9 +563,22 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     put_flash(socket, :info, found <> skipped)
   end
 
-  defp month_closed(socket, {:error, reason}) do
-    put_flash(socket, :error, "Proposing matches stopped. " <> month_close_error_message(reason))
+  defp month_closed(socket, month, {:error, reason}) do
+    message = "Proposing matches for #{month_title(month)} stopped. "
+    put_flash(socket, :error, message <> month_close_error_message(reason))
   end
+
+  defp month_close_error_message(:too_many_steps),
+    do: "It was not done: run it again for what is left. What it found is kept."
+
+  defp month_close_error_message(:cut_off),
+    do: "An answer of the AI was cut off. Run it again; what it found is kept."
+
+  defp month_close_error_message(:already_running),
+    do: "A run for this month is already going. Wait for it to end."
+
+  defp month_close_error_message({:failed, _message}),
+    do: "The AI provider did not accept the request. Check AI_MODEL and the API key."
 
   defp month_close_error_message(:invalid_response),
     do: "The AI answered with something unexpected. Try again."
