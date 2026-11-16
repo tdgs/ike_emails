@@ -23,6 +23,8 @@ defmodule IkeEmails.Banking.Transaction do
 
     belongs_to :user, IkeEmails.Accounts.User
     many_to_many :invoices, Invoice, join_through: "invoice_transactions"
+    # What the month-close agent proposes for it, until the user approves or rejects
+    has_one :proposal, IkeEmails.MonthClose.Proposal
 
     timestamps(type: :utc_datetime)
   end

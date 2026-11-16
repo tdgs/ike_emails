@@ -15,6 +15,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   alias IkeEmails.InvoiceExtractor
   alias IkeEmails.Invoicing
   alias IkeEmails.Money
+  alias IkeEmails.MonthClose
   alias IkeEmails.Settings
   alias IkeEmails.Statements
   alias IkeEmailsWeb.InvoiceUpload
@@ -34,6 +35,8 @@ defmodule IkeEmailsWeb.ReconciliationLive do
      |> assign(:extract_configured?, InvoiceExtractor.configured?())
      |> assign(:extracting?, false)
      |> assign(:extract_error, nil)
+     |> assign(:month_close_configured?, MonthClose.configured?())
+     |> assign(:month_close_task, nil)
      |> stream(:transactions, [])
      |> stream(:suggestions, [])
      |> reset_elorus()
@@ -326,6 +329,50 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     end
   end
 
+  # A run goes on when the page is left: what it proposes is stored, and shows the
+  # next time the month is opened
+  def handle_event("run_month_close", _params, socket) do
+    if socket.assigns.month_close_configured? and socket.assigns.month_close_task == nil do
+      %{current_scope: scope, month: month} = socket.assigns
+
+      task =
+        Task.Supervisor.async_nolink(IkeEmails.TaskSupervisor, fn ->
+          MonthClose.run(scope, month)
+        end)
+
+      {:noreply, assign(socket, :month_close_task, task.ref)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("approve_proposal", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+
+    case MonthClose.get_proposal(scope, id) do
+      # Approved or rejected already, in another tab or by a second click
+      nil ->
+        {:noreply, refresh(socket)}
+
+      # The PDF is downloaded from Elorus, which takes a while
+      %{kind: :import_elorus} = proposal ->
+        {:noreply,
+         start_async(socket, :approve_proposal, fn -> MonthClose.approve(scope, proposal) end)}
+
+      proposal ->
+        {:noreply, approved(socket, MonthClose.approve(scope, proposal))}
+    end
+  end
+
+  def handle_event("reject_proposal", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+
+    with %MonthClose.Proposal{} = proposal <- MonthClose.get_proposal(scope, id),
+         do: MonthClose.reject(scope, proposal)
+
+    {:noreply, refresh(socket)}
+  end
+
   ## Reading the PDF with AI
   #
   # It takes a few seconds, so it runs in an async task. Another panel or a
@@ -377,6 +424,27 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     # the password is one of them
     Logger.error("Unlocking Elorus crashed")
     {:noreply, socket |> assign(:elorus_unlocking?, false) |> elorus_unavailable(:crashed)}
+  end
+
+  def handle_async(:approve_proposal, {:ok, result}, socket) do
+    {:noreply, approved(socket, result)}
+  end
+
+  def handle_async(:approve_proposal, {:exit, reason}, socket) do
+    Logger.error("Approving a proposal crashed: #{inspect(reason)}")
+    {:noreply, approved(socket, {:error, :crashed})}
+  end
+
+  defp approved(socket, :ok), do: refresh(socket)
+
+  defp approved(socket, {:error, :has_invoices}),
+    do: socket |> put_flash(:error, "That transaction has invoices.") |> refresh()
+
+  # What is left is an error of attaching or of Elorus, and the proposal stays
+  defp approved(socket, {:error, reason}) do
+    socket
+    |> put_flash(:error, "The proposal was not applied. " <> elorus_error_message(reason))
+    |> refresh()
   end
 
   defp extract_failed(socket, reason) do
@@ -446,8 +514,52 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     {:noreply, socket |> assign(:elorus_task, nil) |> elorus_failed(task, :crashed)}
   end
 
+  def handle_info({ref, result}, %{assigns: %{month_close_task: ref}} = socket) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, socket |> assign(:month_close_task, nil) |> month_closed(result) |> refresh()}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{assigns: %{month_close_task: ref}} = socket
+      ) do
+    Logger.error("Proposing matches crashed: #{inspect(reason)}")
+
+    {:noreply,
+     socket |> assign(:month_close_task, nil) |> month_closed({:error, :crashed}) |> refresh()}
+  end
+
   # The result of a search whose panel was closed meanwhile
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  defp month_closed(socket, {:ok, %{proposed: count, elorus_skipped?: skipped?}}) do
+    found =
+      case count do
+        0 -> "Nothing could be matched with confidence."
+        1 -> "1 proposal to review."
+        count -> "#{count} proposals to review."
+      end
+
+    skipped =
+      if skipped?,
+        do: " Elorus is locked, so the income was not searched there: unlock it and run again.",
+        else: ""
+
+    put_flash(socket, :info, found <> skipped)
+  end
+
+  defp month_closed(socket, {:error, reason}) do
+    put_flash(socket, :error, "Proposing matches stopped. " <> month_close_error_message(reason))
+  end
+
+  defp month_close_error_message(:invalid_response),
+    do: "The AI answered with something unexpected. Try again."
+
+  defp month_close_error_message(reason)
+       when reason in [:not_configured, :missing_key, :unauthorized, :rate_limited, :timeout],
+       do: InvoiceUpload.extraction_error_message(reason)
+
+  defp month_close_error_message(_reason), do: "Something went wrong. Try again."
 
   defp finish_elorus(socket, %{action: :search}, {:ok, invoices}) do
     stored =
@@ -601,6 +713,19 @@ defmodule IkeEmailsWeb.ReconciliationLive do
         Reconciliation
         <:subtitle>Match every payment of the month to its invoice.</:subtitle>
         <:actions>
+          <.button
+            :if={@month_close_configured? and @summary.missing + @summary.income > 0}
+            id="run-month-close"
+            phx-click="run_month_close"
+            disabled={@month_close_task != nil}
+            title="Let AI look for the invoice of every open transaction. Nothing changes until you approve."
+          >
+            <.icon
+              name={if(@month_close_task, do: "hero-arrow-path", else: "hero-sparkles")}
+              class={if(@month_close_task, do: "size-4 animate-spin", else: "size-4")}
+            />
+            {if(@month_close_task, do: "Looking for matches…", else: "Propose matches")}
+          </.button>
           <%= if @statement do %>
             <.button id="download-month-report" href={~p"/reports/#{month_param(@month)}"}>
               <.icon name="hero-arrow-down-tray" class="size-4" /> Month report
@@ -1034,6 +1159,12 @@ defmodule IkeEmailsWeb.ReconciliationLive do
           </button>
         </div>
 
+        <.proposal
+          :if={@transaction.proposal && @status in [:missing, :income]}
+          proposal={@transaction.proposal}
+          transaction={@transaction}
+        />
+
         <div class="flex flex-wrap items-center gap-2">
           <.link
             patch={~p"/transactions/#{@transaction.id}/invoice?month=#{month_param(@month)}"}
@@ -1054,6 +1185,89 @@ defmodule IkeEmailsWeb.ReconciliationLive do
         </div>
         <.no_invoice_form :if={@status in [:missing, :income]} transaction={@transaction} />
       </div>
+    </div>
+    """
+  end
+
+  attr :proposal, :map, required: true
+  attr :transaction, :map, required: true
+
+  # What the month-close agent proposes for the transaction, to approve or reject
+  defp proposal(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :elorus,
+        assigns.proposal.kind == :import_elorus &&
+          Elorus.Invoice.from_api(assigns.proposal.elorus_invoice)
+      )
+
+    ~H"""
+    <div
+      id={"proposal-#{@transaction.id}"}
+      data-kind={@proposal.kind}
+      class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-sm"
+    >
+      <.icon name="hero-sparkles" class="size-4 shrink-0 text-primary" />
+      <div class="min-w-0 flex-1 basis-64">
+        <div class="flex flex-wrap items-center gap-x-2">
+          <%= case @proposal.kind do %>
+            <% :attach -> %>
+              <span class="font-medium">Attach {@proposal.invoice.issuer_name}</span>
+              <span :if={@proposal.invoice.number} class="text-base-content/60">
+                #{@proposal.invoice.number}
+              </span>
+              <span class="text-base-content/60">{format_date(@proposal.invoice.date)}</span>
+              <.invoice_amount invoice={@proposal.invoice} />
+              <a
+                href={~p"/invoices/#{@proposal.invoice.id}/pdf"}
+                target="_blank"
+                rel="noopener"
+                class="font-medium text-primary hover:underline"
+              >
+                PDF
+              </a>
+            <% :import_elorus -> %>
+              <span class="font-medium">
+                Import {@elorus.representation || "an invoice"} from Elorus
+              </span>
+              <span :if={@elorus.client_name} class="text-base-content/60">
+                {@elorus.client_name}
+              </span>
+              <span :if={@elorus.date} class="text-base-content/60">
+                {format_date(@elorus.date)}
+              </span>
+              <span :if={@elorus.total} class="tabular-nums">
+                {Money.format(Money.cents_from_decimal(@elorus.total), @elorus.currency_code || "EUR")}
+              </span>
+            <% :no_invoice -> %>
+              <span class="font-medium">No invoice needed</span>
+              <span :if={@proposal.note} class="text-base-content/70">
+                &middot; {@proposal.note}
+              </span>
+          <% end %>
+        </div>
+        <div class="break-words text-base-content/60">{@proposal.rationale}</div>
+      </div>
+      <button
+        type="button"
+        id={"approve-proposal-#{@proposal.id}"}
+        phx-click="approve_proposal"
+        phx-value-id={@proposal.id}
+        phx-disable-with="Applying…"
+        class="rounded-lg bg-primary px-2.5 py-1 font-medium text-primary-content transition hover:brightness-110 active:scale-95"
+      >
+        Approve
+      </button>
+      <button
+        type="button"
+        id={"reject-proposal-#{@proposal.id}"}
+        phx-click="reject_proposal"
+        phx-value-id={@proposal.id}
+        class="rounded-lg px-2.5 py-1 font-medium text-base-content/60 transition-colors hover:bg-base-200 hover:text-base-content"
+      >
+        Reject
+      </button>
     </div>
     """
   end

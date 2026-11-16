@@ -69,6 +69,19 @@ and the models. The model must accept PDFs. Switching provider is a change of
 button is clicked. It is also told the business of the user, from `/settings`, to tell
 the invoices they issued from those they received. Without `AI_MODEL` the feature is off.
 
+With `AI_MODEL` set, the reconciliation of a month also has "Propose matches"
+(`IkeEmails.MonthClose`): the model looks for the invoice of every transaction that is
+still open, among the invoices you have stored and, for income, in Elorus, and leaves a
+proposal on the ones it can settle: attach an invoice, import one from Elorus, or mark
+the transaction as needing no invoice. Nothing changes until you approve a proposal, and
+you can reject it. A new run replaces the proposals of the month. Elorus is searched only
+while it is unlocked, so unlock it first (in the panel of a transaction that is money in)
+to have proposals for income. A run sends more to the provider than reading a PDF does:
+the open transactions of the month (date, amount, description and the details of the
+bank), the name and VAT number of your business, and of the invoices that may fit them
+the names, numbers, dates and amounts, with the names of your clients in Elorus. No PDF
+is sent.
+
 In production the PDFs go to S3 or a compatible server, configured with the
 environment variables `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 and `AWS_REGION` (and `AWS_ENDPOINT_URL_S3` for a server that is not AWS).

@@ -29,6 +29,7 @@ ai_model = System.get_env("AI_MODEL")
 
 if config_env() != :test and ai_model not in [nil, ""] do
   config :ike_emails, IkeEmails.InvoiceExtractor, model: ai_model
+  config :ike_emails, IkeEmails.MonthClose, model: ai_model
 end
 
 # Reporting the errors to Sentry is optional: without SENTRY_DSN it is off. The DSN

@@ -36,7 +36,8 @@ defmodule IkeEmails.Banking do
   end
 
   @doc """
-  The transactions of the user booked in a month, oldest first, with their invoices.
+  The transactions of the user booked in a month, oldest first, with their invoices
+  and what the month-close agent proposes for them.
   """
   def list_transactions_for_month(%Scope{} = scope, year, month) do
     first = Date.new!(year, month, 1)
@@ -47,7 +48,7 @@ defmodule IkeEmails.Banking do
         where: t.user_id == ^Scope.user_id(scope),
         where: t.date >= ^first and t.date <= ^last,
         order_by: [asc: t.date, asc: t.transaction_id, asc: t.id],
-        preload: :invoices
+        preload: [:invoices, proposal: :invoice]
     )
   end
 
