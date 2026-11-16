@@ -4,9 +4,7 @@ defmodule IkeEmails.Settings.SealedTokenTest do
 
   import IkeEmails.Fixtures
 
-  alias IkeEmails.Settings
   alias IkeEmails.Settings.SealedToken
-  alias IkeEmails.Settings.UserSettings
 
   @token "an-elorus-api-key-1234"
   @password "a valid password 123"
@@ -99,21 +97,6 @@ defmodule IkeEmails.Settings.SealedTokenTest do
   end
 
   describe "the server keys" do
-    test "seal with the first, and open what an older one sealed", %{original: original} do
-      {old_sealed, old_salt} = SealedToken.seal(@token, @password, 1)
-      assert SealedToken.current_key?(old_sealed)
-
-      put_config(keys: [{"2", key(2)} | original[:keys]])
-
-      refute SealedToken.current_key?(old_sealed)
-      assert SealedToken.unseal(old_sealed, old_salt, @password, 1) == {:ok, @token}
-
-      {new_sealed, new_salt} = SealedToken.seal(@token, @password, 1)
-      assert String.starts_with?(new_sealed, "2.XCP.")
-      assert SealedToken.current_key?(new_sealed)
-      assert SealedToken.unseal(new_sealed, new_salt, @password, 1) == {:ok, @token}
-    end
-
     test "do not open what a key that is gone sealed" do
       {sealed, salt} = SealedToken.seal(@token, @password, 1)
 
@@ -191,31 +174,6 @@ defmodule IkeEmails.Settings.SealedTokenTest do
       refute salt =~ @token
       refute sealed =~ valid_user_password()
       refute salt =~ valid_user_password()
-    end
-
-    test "a key that is older is sealed again when it is opened", %{
-      scope: scope,
-      original: original
-    } do
-      settings_fixture(scope, %{}, token: @token)
-      %{elorus_token_sealed: old_sealed} = Repo.get_by!(UserSettings, user_id: scope.user.id)
-      assert String.starts_with?(old_sealed, "1.")
-
-      put_config(keys: [{"2", key(2)} | original[:keys]])
-
-      assert {:ok, %{api_token: @token}} =
-               Settings.unseal_elorus_credentials(scope, valid_user_password())
-
-      %{elorus_token_sealed: sealed} = Repo.get_by!(UserSettings, user_id: scope.user.id)
-      assert String.starts_with?(sealed, "2.XCP.")
-
-      # And it does not wait for the old key
-      put_config(keys: [{"2", key(2)}])
-
-      assert {:ok, %{api_token: @token}} =
-               Settings.unseal_elorus_credentials(scope, valid_user_password())
-
-      assert Repo.get_by!(UserSettings, user_id: scope.user.id).elorus_token_sealed == sealed
     end
   end
 end

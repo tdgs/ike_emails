@@ -29,12 +29,21 @@ defmodule IkeEmails.Banking.Transaction do
 
   @doc """
   Casts a transaction as the bank crawler pushes it. Blank optional fields are
-  stored as `nil`.
+  stored as `nil`. What does not fit the columns (255 characters, an amount of
+  numeric(15, 2)) is an error of the field, not a crash of the insert.
   """
   def changeset(transaction, attrs) do
     transaction
     |> cast(attrs, @required ++ @optional)
     |> validate_required(@required)
+    |> validate_length(:description, max: 255)
+    |> validate_length(:branch, max: 255)
+    |> validate_length(:transaction_id, max: 255)
+    # What numeric(15, 2) holds once rounded to cents
+    |> validate_number(:amount,
+      greater_than_or_equal_to: Decimal.new("-9999999999999.99"),
+      less_than_or_equal_to: Decimal.new("9999999999999.99")
+    )
   end
 
   @doc """

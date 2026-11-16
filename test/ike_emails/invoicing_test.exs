@@ -76,7 +76,7 @@ defmodule IkeEmails.InvoicingTest do
     end
 
     test "rejects a PDF that is too large", %{scope: scope} do
-      big = "%PDF-" <> :binary.copy("0", Invoicing.max_pdf_bytes())
+      big = "%PDF-" <> :binary.copy("0", IkeEmails.Storage.max_pdf_bytes())
 
       assert {:error, :too_large} =
                Invoicing.create_invoice(scope, invoice_attrs(), big, "big.pdf")
@@ -370,6 +370,32 @@ defmodule IkeEmails.InvoicingTest do
       ids = scope |> Invoicing.suggest_invoices(transaction) |> Enum.map(& &1.id)
 
       assert ids == [exact.id, unmatched_close.id, unmatched_far.id, matched_close.id]
+    end
+
+    test "puts first the invoice of the amount in the currency it was charged in",
+         %{scope: scope} do
+      transaction =
+        transaction_fixture(scope, %{
+          "amount" => "-18.01",
+          "date" => "2026-10-12",
+          "conversion_details" => "20,00 USD"
+        })
+
+      closer_in_euros =
+        invoice_fixture(scope, %{"amount_input" => "18,01", "date" => "2026-10-12"})
+
+      in_dollars =
+        invoice_fixture(scope, %{
+          "amount_input" => "20,00",
+          "currency" => "USD",
+          "date" => "2026-09-01"
+        })
+
+      ids = scope |> Invoicing.suggest_invoices(transaction) |> Enum.map(& &1.id)
+
+      assert ids == [in_dollars.id, closer_in_euros.id]
+      assert Invoicing.same_amount?(in_dollars, transaction)
+      refute Invoicing.same_amount?(closer_in_euros, transaction)
     end
 
     test "leaves out the invoices already on the transaction", %{scope: scope} do

@@ -249,6 +249,18 @@ defmodule IkeEmails.SettingsTest do
   end
 
   describe "set_elorus_token/3" do
+    # Two tabs, for a user who has no settings yet: both insert, and the second finds
+    # the row of the first. It is an error to show, not a crash of the page
+    test "is an error when the row was made in the meantime", %{scope: scope} do
+      unsaved = Settings.get_settings(scope)
+      settings_fixture(scope, %{business_name: "Acme"}, token: nil)
+
+      assert {:error, changeset} =
+               unsaved |> UserSettings.token_changeset("sealed", "salt") |> Repo.insert()
+
+      assert %{user_id: ["has already been taken"]} = errors_on(changeset)
+    end
+
     test "stores the token sealed, for the password of the user", %{scope: scope} do
       assert {:ok, settings} = Settings.set_elorus_token(scope, @token, valid_user_password())
 

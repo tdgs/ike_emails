@@ -13,8 +13,8 @@ defmodule IkeEmails.Chrome.Launcher do
   business with: the key of the endpoint, the database URL, the key that seals the
   credentials of the users. With `-i` it starts with nothing, and gets only:
 
-    * `HOME`, which is the option `:home`, else the user data directory, so that
-      what Chrome writes outside of the profile is deleted with it
+    * `HOME`, which is the user data directory, so that what Chrome writes outside of
+      the profile is deleted with it
     * `PATH`
     * `DISPLAY`, `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` when there is a window
       (`headless: false`), to be able to open it
@@ -24,7 +24,7 @@ defmodule IkeEmails.Chrome.Launcher do
     * `:user_data_dir` - required. Chrome refuses to be controlled from outside when it
       uses its default profile, and a profile is locked by one Chrome at a time. It is
       created if it is missing
-    * `:chrome_path`, `:home`
+    * `:chrome_path`
     * `:headless` - `true` unless `false`
     * `:lang` - the language of the browser, `"en-US"`
     * `:no_sandbox` - leaves out the sandbox of Chrome, which a container without the
@@ -49,10 +49,11 @@ defmodule IkeEmails.Chrome.Launcher do
   def command(opts) do
     with {:ok, user_data_dir} <- user_data_dir(opts),
          {:ok, chrome} <- find_chrome(opts) do
-      home = Keyword.get(opts, :home, user_data_dir)
       headless? = Keyword.get(opts, :headless, true)
 
-      args = ["-i" | environment(home, headless?)] ++ [chrome | flags(opts, user_data_dir)]
+      args =
+        ["-i" | environment(user_data_dir, headless?)] ++ [chrome | flags(opts, user_data_dir)]
+
       {:ok, %{executable: @env, args: args}}
     end
   end

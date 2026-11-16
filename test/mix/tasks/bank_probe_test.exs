@@ -142,46 +142,6 @@ defmodule Mix.Tasks.Bank.ProbeTest do
     end
   end
 
-  describe "check_shell!/1" do
-    test "refuses to ask inside iex, where the echo cannot be turned off" do
-      error = assert_raise Mix.Error, ~r/plain shell/, fn -> Probe.check_shell!(true) end
-
-      assert error.message =~ "iex"
-    end
-
-    test "goes on in a plain shell" do
-      assert Probe.check_shell!(false) == :ok
-    end
-  end
-
-  describe "typed!/1" do
-    test "returns the line without its end of line" do
-      assert Probe.typed!("pä-Ωé\n") == "pä-Ωé"
-      assert Probe.typed!("pä-Ωé\r\n") == "pä-Ωé"
-      assert Probe.typed!("pä-Ωé") == "pä-Ωé"
-    end
-
-    test "keeps the spaces, which can be part of a password" do
-      assert Probe.typed!("  a b \n") == "  a b "
-    end
-
-    test "refuses a line that is not valid UTF-8, without showing it" do
-      error = assert_raise Mix.Error, fn -> Probe.typed!(<<"abc", 0xE9, "\n">>) end
-
-      assert error.message == "What was typed is not valid UTF-8 text."
-    end
-
-    test "refuses an empty line, the end of the input and an error of the device" do
-      for line <- ["", "\n", "\r\n", :eof] do
-        assert_raise Mix.Error, ~r/Nothing was typed/, fn -> Probe.typed!(line) end
-      end
-
-      assert_raise Mix.Error, ~r/could not be read as text/, fn ->
-        Probe.typed!({:error, :collect_line})
-      end
-    end
-  end
-
   describe "while_logged_in/3" do
     setup do
       me = self()
@@ -286,8 +246,33 @@ defmodule Mix.Tasks.Bank.ProbeTest do
                "  visible inputs, buttons, selects and links: 2",
                ~s|    input type="text" id="user" placeholder="Enter your username" class="form-control ng-pristine"|,
                "    button",
-               ~s|  .login-error (the one text of the page that is printed): "The user name or the password is wrong"|
+               ~s|  .login-error: "The user name or the password is wrong"|
              ]
+    end
+
+    test "lists the messages the page shows, with their text, only with the elements" do
+      snapshot =
+        Map.put(@snapshot, "alerts", [
+          %{"tag" => "mat-error", "classes" => ["mat-mdc-form-field-error"], "text" => "Wrong"},
+          %{"tag" => "div", "role" => "alert", "classes" => [], "text" => "Try again"}
+        ])
+
+      lines = Probe.lines(snapshot, true)
+
+      assert "  messages shown (alerts, errors):" in lines
+      assert ~s|    mat-error class="mat-mdc-form-field-error" text="Wrong"| in lines
+      assert ~s|    div role="alert" text="Try again"| in lines
+
+      refute Enum.any?(Probe.lines(snapshot, false), &(&1 =~ "Try again"))
+    end
+
+    test "marks an element that is disabled" do
+      snapshot = %{
+        @snapshot
+        | "elements" => [%{"tag" => "button", "type" => "submit", "disabled" => true}]
+      }
+
+      assert ~s|    button type="submit" disabled| in Probe.lines(snapshot, true)
     end
 
     test "writes no element when it is not asked to, but counts them" do
@@ -326,6 +311,23 @@ defmodule Mix.Tasks.Bank.ProbeTest do
           ] do
         refute script =~ forbidden
       end
+    end
+  end
+
+  describe "outcome_message/1" do
+    test "says that a timeout is a login that was sent" do
+      assert Probe.outcome_message({:error, :timeout}) =~ "The login was sent"
+    end
+
+    for reason <- [:no_login_page, :no_login_form, :no_login_button] do
+      test "says that nothing was sent for #{reason}" do
+        assert Probe.outcome_message({:error, unquote(reason)}) =~ "Nothing was sent"
+      end
+    end
+
+    test "says nothing more for a result that is already plain" do
+      for result <- [:ok, {:error, :bad_credentials}, {:error, :session_in_use}],
+          do: assert(Probe.outcome_message(result) == nil)
     end
   end
 end

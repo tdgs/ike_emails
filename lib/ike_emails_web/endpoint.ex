@@ -11,11 +11,11 @@ defmodule IkeEmailsWeb.Endpoint do
     same_site: "Lax"
   ]
 
-  # :uri and :user_agent are for Sentry.LiveViewHook. Not :peer_data, that puts the
-  # IP address of the user in the reports.
+  # No Sentry.LiveViewHook: it would send the form values of every event (the invoices)
+  # and every message the LiveView gets to Sentry with any error of the process
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [:uri, :user_agent, session: @session_options]],
-    longpoll: [connect_info: [:uri, :user_agent, session: @session_options]]
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: [connect_info: [session: @session_options]]
 
   # Serve at "/" the static files from "priv/static" directory.
   #
@@ -35,20 +35,27 @@ defmodule IkeEmailsWeb.Endpoint do
     plug Phoenix.LiveReloader
     plug Phoenix.CodeReloader
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :ike_emails
+
+    # For the dashboard, which is only routed in development
+    plug Phoenix.LiveDashboard.RequestLogger,
+      param_key: "request_logger",
+      cookie_key: "request_logger"
   end
 
   # Kamal's proxy asks this before it sends traffic to a new container
   plug :health_check
 
-  plug Phoenix.LiveDashboard.RequestLogger,
-    param_key: "request_logger",
-    cookie_key: "request_logger"
-
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # A multipart body is the PDF of a statement (PUT /api/statements/:month) and a little
+  # more around it. Without the length, Plug refuses anything over 8 MB with a 413
   plug Plug.Parsers,
-    parsers: [:urlencoded, :multipart, :json],
+    parsers: [
+      :urlencoded,
+      {:multipart, length: IkeEmails.Storage.max_pdf_bytes() + 1_000_000},
+      :json
+    ],
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
 

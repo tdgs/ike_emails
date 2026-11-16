@@ -148,20 +148,26 @@ defmodule IkeEmails.BankingReconciliationTest do
     {:ok, exempt} =
       Banking.mark_no_invoice(scope, transaction_fixture(scope, %{"amount" => "-1157.98"}), "tax")
 
+    # Money in with an invoice is invoiced, but it is no payment
+    invoiced_income = transaction_fixture(scope, %{"amount" => "300"})
+    :ok = Invoicing.attach(scope, invoice_fixture(scope), invoiced_income)
+
     transactions = [
       Banking.get_transaction!(scope, invoiced.id),
       %{exempt | invoices: []},
       transaction_fixture(scope, %{"amount" => "-90.00"}),
       transaction_fixture(scope, %{"amount" => "-4.51"}),
-      transaction_fixture(scope, %{"amount" => "594.40"})
+      transaction_fixture(scope, %{"amount" => "594.40"}),
+      Banking.get_transaction!(scope, invoiced_income.id)
     ]
 
     assert Banking.month_summary(transactions) == %{
-             invoiced: 1,
+             invoiced: 2,
              exempt: 1,
              missing: 2,
              income: 1,
-             missing_cents: 9451
+             missing_cents: 9451,
+             paid_reconciled: 2
            }
   end
 end

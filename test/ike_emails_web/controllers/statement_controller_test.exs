@@ -51,6 +51,30 @@ defmodule IkeEmailsWeb.StatementControllerTest do
   end
 
   describe "create" do
+    # Through the parser of the endpoint, as the crawler sends it: ConnTest hands a
+    # %Plug.Upload{} to the controller and skips it
+    test "takes a PDF larger than the 8 MB that Plug takes by default",
+         %{conn: conn, scope: scope, token: token} do
+      pdf = "%PDF-" <> :binary.copy("0", 9_000_000)
+      boundary = "statement-boundary"
+
+      body =
+        "--#{boundary}\r\n" <>
+          ~s|content-disposition: form-data; name="file"; filename="big.pdf"\r\n| <>
+          "content-type: application/pdf\r\n\r\n" <>
+          pdf <> "\r\n--#{boundary}--\r\n"
+
+      conn =
+        conn
+        |> authorized(token)
+        |> put_req_header("content-type", "multipart/form-data; boundary=#{boundary}")
+        |> put(~p"/api/statements/2026-10", body)
+
+      assert json_response(conn, 201)
+      assert %Statement{file_size: size} = Statements.get_statement(scope, ~D[2026-10-01])
+      assert size == byte_size(pdf)
+    end
+
     test "files the PDF under the month", %{conn: conn, scope: scope, token: token} do
       pdf = pdf_fixture()
 

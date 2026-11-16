@@ -7,7 +7,7 @@ defmodule IkeEmails.Chrome.Frames do
   reads, and one read can hold several messages. `push/2` takes what is left over
   from the last read and the new data, and returns the messages that are complete
   and what is left over now. The left over is a list of the chunks of the message
-  that is being read, the last one first, so that a large message (a screenshot, a
+  that is being read, the last one first, so that a large message (the PDF of a
   statement) is put together once, when it is complete, and not at every read.
 
   Nothing here looks inside a message, and an empty one (two NULs in a row) is not

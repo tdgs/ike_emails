@@ -25,7 +25,7 @@ deploy:
 sync-secrets:
 	$(OP_RUN) sh -c '\
 		for name in DEPLOY_HOST APP_HOST SECRET_KEY_BASE SETTINGS_ENCRYPTION_KEY POSTGRES_PASSWORD \
-			BANK_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ANTHROPIC_API_KEY SENTRY_DSN; do \
+			AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY ANTHROPIC_API_KEY SENTRY_DSN; do \
 			printenv $$name | gh secret set $$name --env production || exit 1; \
 		done'
 	op read "op://Employee/ike-emails GitHub Actions deploy key/private key?ssh-format=openssh" \

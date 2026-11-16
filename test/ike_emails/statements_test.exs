@@ -120,7 +120,7 @@ defmodule IkeEmails.StatementsTest do
     end
 
     test "refuses a PDF that is too large", %{scope: scope} do
-      pdf = "%PDF-" <> :binary.copy("0", Statements.max_pdf_bytes())
+      pdf = "%PDF-" <> :binary.copy("0", IkeEmails.Storage.max_pdf_bytes())
 
       assert {:error, :too_large} = Statements.put_statement(scope, "2026-10", pdf, "a.pdf")
       assert Repo.aggregate(Statement, :count) == 0

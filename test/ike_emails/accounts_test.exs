@@ -148,6 +148,45 @@ defmodule IkeEmails.AccountsTest do
       assert Accounts.get_user_by_email_and_password("me@example.com", "") == nil
     end
 
+    test "refuses even the right password after 10 wrong ones" do
+      for _guess <- 1..10,
+          do: assert(Accounts.get_user_by_email_and_password("me@example.com", "wrong") == nil)
+
+      assert Accounts.get_user_by_email_and_password("me@example.com", @password) == nil
+    end
+
+    test "counts guesses that are sent at the same time" do
+      1..20
+      |> Task.async_stream(fn _guess ->
+        Accounts.get_user_by_email_and_password("me@example.com", "wrong")
+      end)
+      |> Stream.run()
+
+      assert Accounts.get_user_by_email_and_password("me@example.com", @password) == nil
+    end
+
+    test "starts a new window once 15 minutes have passed since the first" do
+      alias IkeEmails.Accounts.LoginThrottle
+
+      id = -System.unique_integer([:positive])
+      long_ago = System.monotonic_time(:millisecond) - :timer.minutes(16)
+      :ets.insert(LoginThrottle, {id, 10, long_ago})
+
+      assert LoginThrottle.attempt(id) == :ok
+      assert [{^id, 1, _since}] = :ets.lookup(LoginThrottle, id)
+    end
+
+    test "starts counting again after a login that works", %{user: user} do
+      for _round <- 1..2 do
+        for _guess <- 1..9, do: Accounts.get_user_by_email_and_password("me@example.com", "wrong")
+
+        assert %User{id: id} =
+                 Accounts.get_user_by_email_and_password("me@example.com", @password)
+
+        assert id == user.id
+      end
+    end
+
     test "the password is case sensitive" do
       assert Accounts.get_user_by_email_and_password("me@example.com", String.upcase(@password)) ==
                nil
@@ -192,12 +231,16 @@ defmodule IkeEmails.AccountsTest do
     end
   end
 
-  describe "error_messages/1" do
-    test "lists what is wrong, with the limits filled in" do
+  # What mix user.create and the release say when a user cannot be made
+  describe "the errors of a user" do
+    test "list what is wrong, with the limits filled in" do
       assert {:error, changeset} =
                Accounts.register_user(%{email: "nope", password: "short"})
 
-      assert Accounts.error_messages(changeset) == %{
+      assert Ecto.Changeset.traverse_errors(
+               changeset,
+               &IkeEmailsWeb.CoreComponents.translate_error/1
+             ) == %{
                email: ["must have the @ sign and no spaces"],
                password: ["should be at least 12 character(s)"]
              }

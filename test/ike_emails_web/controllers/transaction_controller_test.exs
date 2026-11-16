@@ -203,5 +203,17 @@ defmodule IkeEmailsWeb.TransactionControllerTest do
       assert errors["description"] == ["can't be blank"]
       assert Banking.list_transactions(scope) == []
     end
+
+    # The columns would refuse them, with a crash and a 500
+    test "reports what does not fit the columns", %{conn: conn, token: token, scope: scope} do
+      params = %{@transaction | "description" => String.duplicate("x", 256), "amount" => "1e13"}
+
+      conn = conn |> authorized(token) |> post_transaction(params)
+
+      assert %{"errors" => errors} = json_response(conn, 422)
+      assert errors["description"] == ["should be at most 255 character(s)"]
+      assert errors["amount"] == ["must be less than or equal to 9999999999999.99"]
+      assert Banking.list_transactions(scope) == []
+    end
   end
 end

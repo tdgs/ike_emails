@@ -50,7 +50,7 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLMTest do
     Application.put_env(
       :ike_emails,
       InvoiceExtractor,
-      Keyword.put(settings, :req_http_options, plug: plug, retry: false)
+      Keyword.put(settings, :req_http_options, plug: plug)
     )
   end
 
@@ -120,6 +120,33 @@ defmodule IkeEmails.InvoiceExtractor.Client.ReqLLMTest do
 
     assert Client.generate(pdf_fixture(), "Read it.", @fields, "anthropic:claude-sonnet-5-5") ==
              {:error, :rate_limited}
+
+    # Sent once: every retry of ReqLLM would be another call that is paid for
+    assert_received {:request, _conn, _body}
+    refute_received {:request, _conn, _body}
+  end
+
+  test "maps a model that does not answer in time, and asks once" do
+    test = self()
+
+    plug = fn conn ->
+      send(test, :requested)
+      Req.Test.transport_error(conn, :timeout)
+    end
+
+    settings = Application.fetch_env!(:ike_emails, InvoiceExtractor)
+
+    Application.put_env(
+      :ike_emails,
+      InvoiceExtractor,
+      Keyword.put(settings, :req_http_options, plug: plug)
+    )
+
+    assert Client.generate(pdf_fixture(), "Read it.", @fields, "anthropic:claude-sonnet-5-5") ==
+             {:error, :timeout}
+
+    assert_received :requested
+    refute_received :requested
   end
 
   test "maps an answer that is not the object" do

@@ -72,12 +72,6 @@ defmodule IkeEmails.Chrome.LauncherTest do
              ]
     end
 
-    test "takes the home from the option", %{dir: dir, chrome: chrome} do
-      {:ok, %{args: args}} = command(chrome_path: chrome, user_data_dir: dir, home: "/tmp/h")
-
-      assert "HOME=/tmp/h" in args
-    end
-
     test "controls Chrome through the pipe, with the profile and the usual flags", %{
       dir: dir,
       chrome: chrome

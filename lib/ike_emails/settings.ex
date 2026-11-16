@@ -114,8 +114,6 @@ defmodule IkeEmails.Settings do
              password,
              settings.user_id
            ) do
-      reseal_if_old(settings, token, password)
-
       {:ok,
        %Credentials{
          api_token: token,
@@ -138,28 +136,6 @@ defmodule IkeEmails.Settings do
       where:
         s.user_id == ^Scope.user_id(scope) and not is_nil(s.elorus_token_sealed) and
           not is_nil(s.elorus_token_salt) and not is_nil(s.elorus_organization_id)
-  end
-
-  # Sealed with a server key that is not the current one: the password is at hand,
-  # so it is sealed again with the current one. It is only stored if the key was
-  # not changed meanwhile, and failing to is no reason to refuse the unlock.
-  defp reseal_if_old(settings, token, password) do
-    unless SealedToken.current_key?(settings.elorus_token_sealed) do
-      {sealed, salt} = SealedToken.seal(token, password, settings.user_id)
-
-      {count, _} =
-        Repo.update_all(
-          from(s in UserSettings,
-            where: s.id == ^settings.id and s.elorus_token_sealed == ^settings.elorus_token_sealed
-          ),
-          set: [elorus_token_sealed: sealed, elorus_token_salt: salt]
-        )
-
-      if count == 1,
-        do: Logger.info("User #{settings.user_id} had the Elorus API key sealed again")
-    end
-
-    :ok
   end
 
   @doc """

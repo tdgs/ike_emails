@@ -17,7 +17,7 @@ defmodule IkeEmailsWeb.SentryTest do
     metadata = Keyword.fetch!(dictionary, :"$logger_metadata$")
     sentry = Map.fetch!(metadata, Sentry.Context.__logger_metadata_key__())
 
-    %{sentry | breadcrumbs: sentry |> Map.get(:breadcrumbs, []) |> Enum.reverse()}
+    Map.put(sentry, :breadcrumbs, sentry |> Map.get(:breadcrumbs, []) |> Enum.reverse())
   end
 
   test "is off without a DSN, as it is in the tests" do
@@ -89,10 +89,10 @@ defmodule IkeEmailsWeb.SentryTest do
     end
   end
 
-  describe "the context of the settings page" do
-    # What is typed in at /settings must not leave us, and the event that sends it is
-    # a breadcrumb of what happened before an error
-    test "has the events of the forms, without the API key and the password" do
+  describe "the context of a LiveView" do
+    # What is typed in a form must not leave us. Sentry.LiveViewHook would keep every
+    # event with its params as a breadcrumb, and send it with any error of the process
+    test "keeps nothing of the forms" do
       user = user_fixture()
       scope = user_scope_fixture(user)
       settings_fixture(scope, %{}, token: nil)
@@ -109,25 +109,17 @@ defmodule IkeEmailsWeb.SentryTest do
 
       context = context_of(view.pid)
 
-      assert %{data: %{params: params}} =
-               Enum.find(context.breadcrumbs, &(&1[:category] == "web.live_view.event"))
-
-      # It is there, so that it is not for lack of it that the secrets are not
-      assert params["api_token"] == "[Filtered]"
-      assert params["password"] == "[Filtered]"
-
+      assert context.breadcrumbs == []
       refute inspect(context, limit: :infinity) =~ token
       refute inspect(context, limit: :infinity) =~ password
     end
 
-    test "is the id of the user, and the address of the page" do
+    test "is the id of the user" do
       user = user_fixture()
 
       {:ok, view, _html} = live(log_in_user(build_conn(), user), ~p"/settings")
 
-      context = context_of(view.pid)
-      assert context.user == %{id: user.id}
-      assert context.request.url =~ "/settings"
+      assert context_of(view.pid).user == %{id: user.id}
     end
   end
 end

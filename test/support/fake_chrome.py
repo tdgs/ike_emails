@@ -31,7 +31,6 @@ Fake.failNext, with the method to fail as {"method": ...}, makes the next comman
 that method fail with the code -32000, which no real Chrome has.
 """
 
-import base64
 import json
 import os
 import sys
@@ -233,9 +232,6 @@ def handle(message):
         os._exit(0)
     if method == "Page.navigate":
         return navigate(params, session, reply)
-    if method == "Page.captureScreenshot":
-        png = b"\x89PNG\r\n\x1a\n" + b"fake"
-        return reply({"data": base64.b64encode(png).decode("ascii")})
     if method == "Runtime.evaluate":
         return runtime_evaluate(message, params, session, reply)
 
