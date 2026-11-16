@@ -299,6 +299,22 @@ defmodule IkeEmails.MonthCloseTest do
       assert {:ok, %{proposed: 0}} = MonthClose.run(scope, @month)
     end
 
+    @tag :capture_log
+    test "asks OpenAI not to keep the conversation, and sends the tools", %{scope: scope} do
+      settings = Application.fetch_env!(:ike_emails, MonthClose)
+      on_exit(fn -> Application.put_env(:ike_emails, MonthClose, settings) end)
+      Application.put_env(:ike_emails, MonthClose, Keyword.put(settings, :model, "openai:gpt-5"))
+
+      transaction_fixture(scope)
+      LLMStub.script([{500, %{"error" => %{"message" => "unavailable"}}}])
+
+      assert {:error, {:failed, _message}} = MonthClose.run(scope, @month)
+
+      assert [request | _] = requests()
+      assert request["store"] == false
+      assert Enum.sort(Enum.map(request["tools"], & &1["name"])) == ["find_invoices", "propose"]
+    end
+
     test "is off without a model", %{scope: scope} do
       settings = Application.fetch_env!(:ike_emails, MonthClose)
       on_exit(fn -> Application.put_env(:ike_emails, MonthClose, settings) end)

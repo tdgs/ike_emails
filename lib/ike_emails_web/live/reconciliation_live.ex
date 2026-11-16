@@ -340,8 +340,10 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     {:noreply, approved(socket, result)}
   end
 
-  def handle_async({:approve_proposal, _id}, {:exit, reason}, socket) do
-    Logger.error("Approving a proposal crashed: #{inspect(reason)}")
+  def handle_async({:approve_proposal, _id}, {:exit, _reason}, socket) do
+    # The reason is left out of the log: it can hold the arguments of the call, which
+    # are the proposal and the transaction of the user. The crash report has it.
+    Logger.error("Approving a proposal crashed")
     {:noreply, approved(socket, {:error, :crashed})}
   end
 
@@ -433,10 +435,12 @@ defmodule IkeEmailsWeb.ReconciliationLive do
   end
 
   def handle_info(
-        {:DOWN, ref, :process, _pid, reason},
+        {:DOWN, ref, :process, _pid, _reason},
         %{assigns: %{month_close_task: %{ref: ref} = task}} = socket
       ) do
-    Logger.error("Proposing matches crashed: #{inspect(reason)}")
+    # The reason is left out of the log, as above: here the arguments are the
+    # transactions of the user
+    Logger.error("Proposing matches crashed")
 
     {:noreply,
      socket
@@ -480,7 +484,7 @@ defmodule IkeEmailsWeb.ReconciliationLive do
     do: "A run for this month is already going. Wait for it to end."
 
   defp month_close_error_message({:failed, _message}),
-    do: "The AI provider did not accept the request. Check AI_MODEL and the API key."
+    do: "The AI call failed. Run it again; if it keeps failing, check AI_MODEL and the API key."
 
   defp month_close_error_message(:invalid_response),
     do: "The AI answered with something unexpected. Try again."

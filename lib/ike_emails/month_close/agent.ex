@@ -104,15 +104,15 @@ defmodule IkeEmails.MonthClose.Agent do
     end)
   end
 
-  # No retries, as for the reading of an invoice: ReqLLM retries 3 times by default,
-  # so a step slower than the timeout would be sent, and paid for, four times. A run
-  # that fails keeps what it found, and can be run again.
+  # One retry, where ReqLLM makes 3: a step slower than the timeout is sent, and paid
+  # for, twice at most and not four times. The reading of an invoice has none, as it is
+  # one call; here a failure at step 18 of 25 would be paid for again by the next run.
   defp options(model, tools) do
     [
       tools: tools,
       max_tokens: @max_tokens,
       receive_timeout: @receive_timeout,
-      max_retries: 0,
+      max_retries: 1,
       req_http_options: Keyword.get(config(), :req_http_options, [])
     ] ++ cache(LLM.provider(model))
   end
@@ -327,8 +327,6 @@ defmodule IkeEmails.MonthClose.Agent do
     with :error <- Statement.parse_month(month), do: {:error, "The month must be YYYY-MM."}
   end
 
-  # The reason is not shown to the model as it is: an error of Elorus can carry
-  # what it answered
   # A month is asked for once, and what Elorus answered, an error as well, is kept
   defp elorus_month(state, transaction, month) do
     case state.elorus_months do
@@ -353,6 +351,8 @@ defmodule IkeEmails.MonthClose.Agent do
     end
   end
 
+  # The reason is not shown to the model as it is: an error of Elorus can carry
+  # what it answered
   defp search_elorus(scope, transaction, month) do
     case Invoicing.search_elorus(scope, transaction, month) do
       {:ok, invoices} ->

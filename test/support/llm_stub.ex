@@ -7,6 +7,9 @@ defmodule IkeEmails.LLMStub do
   It changes the configuration of the application, so the tests cannot be async.
   """
 
+  # The keys of the providers the tests use a model of
+  @keys ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+
   @doc """
   Answers the requests with `replies`, one after the other, and goes on with the
   last one when they are used up. A reply is a body (see `tool_use/1` and
@@ -32,7 +35,7 @@ defmodule IkeEmails.LLMStub do
     end
 
     settings = Application.fetch_env!(:ike_emails, IkeEmails.MonthClose)
-    key = System.get_env("ANTHROPIC_API_KEY")
+    keys = Map.new(@keys, &{&1, System.get_env(&1)})
 
     Application.put_env(
       :ike_emails,
@@ -40,14 +43,15 @@ defmodule IkeEmails.LLMStub do
       Keyword.put(settings, :req_http_options, plug: plug, retry: false)
     )
 
-    System.put_env("ANTHROPIC_API_KEY", "test-anthropic-key")
+    Enum.each(@keys, &System.put_env(&1, "test-key"))
 
     ExUnit.Callbacks.on_exit(fn ->
       Application.put_env(:ike_emails, IkeEmails.MonthClose, settings)
 
-      if key,
-        do: System.put_env("ANTHROPIC_API_KEY", key),
-        else: System.delete_env("ANTHROPIC_API_KEY")
+      Enum.each(keys, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
     end)
 
     :ok
